@@ -38,6 +38,7 @@
 
 #include "../evaluate.h"
 #include "../misc.h"
+#include "../movegen.h"
 #include "../position.h"
 #include "../types.h"
 #include "../uci.h"
@@ -155,6 +156,16 @@ void update_weights(int phase, const Position& pos, int& talWeight, int& petrosi
     capablancaWeight += calculate_capablanca_weight(pos, indicators);
     petrosianWeight += calculate_petrosian_weight(pos, indicators);
 
+    // Normalize the weights to keep them within a reasonable total
+    int total = talWeight + capablancaWeight + petrosianWeight;
+
+    if (total > 0) {
+        float scale = 300.0f / total; // Target total weight, adjustable
+        talWeight        = int(talWeight * scale);
+        capablancaWeight = int(capablancaWeight * scale);
+        petrosianWeight  = int(petrosianWeight * scale);
+    }
+
     // Use manual weights if the "ManualWeights" option is enabled.
     if (Options["NNUE ManualWeights"]) {
         StrategyMaterialWeight = Options["NNUE StrategyMaterialWeight"];
@@ -190,14 +201,48 @@ void update_weights_with_blend(const Position& pos, int& talWeight, int& petrosi
     if (!Eval::style_is_enabled()) {
         return; // Skip NNUE weight blending if style is Off
     }
+
     int dynamicPhase = determine_dynamic_phase(pos); // Determine the dynamic phase of the game.
     PositionalIndicators indicators = compute_positional_indicators(pos); // Compute positional indicators.
 
+    // Compute Tactical Complexity Factor (TCF)
+    int tacticalComplexity = 0;
+
+    // Determine side to move and opposite
+    Color us   = pos.side_to_move();
+    Color them = ~us;
+    Square usKing   = pos.king_square(us);
+    Square themKing = pos.king_square(them);
+
+    // Count attackers on both kings
+    tacticalComplexity += popcount(pos.attackers_to(usKing)) * 2;
+    tacticalComplexity += popcount(pos.attackers_to(themKing)) * 2;
+
+    // Add tactical tension from available non-pawn captures
+    for (Move m : MoveList<LEGAL>(pos)) {
+        Square to = m.to_sq();
+        Piece captured = pos.piece_on(to);
+        if (type_of(captured) != NO_PIECE_TYPE &&
+            type_of(captured) != PAWN &&
+            m.type_of() != CASTLING &&
+            m.type_of() != PROMOTION)
+        {
+            tacticalComplexity += 1;
+        }
+    }
+
     // Dynamic blend based on the phase of the game
     float phaseFactor = dynamicPhase / 100.0f; // Normalize the phase to a value between 0 (endgame) and 1 (opening).
-    talWeight = static_cast<int>((1 - phaseFactor) * indicators.centerDominance + phaseFactor * indicators.kingSafety);
+    talWeight        = static_cast<int>((1 - phaseFactor) * indicators.centerDominance + phaseFactor * indicators.kingSafety);
     capablancaWeight = static_cast<int>((1 - phaseFactor) * indicators.materialImbalance + phaseFactor * indicators.centerControl);
-    petrosianWeight = static_cast<int>((1 - phaseFactor) * indicators.flankControl + phaseFactor * indicators.pieceActivity);
+    petrosianWeight  = static_cast<int>((1 - phaseFactor) * indicators.flankControl + phaseFactor * indicators.pieceActivity);
+
+    // Apply Tactical Complexity boost to Tal and adjust others
+    if (tacticalComplexity > 0) {
+        talWeight        += tacticalComplexity * 2;
+        capablancaWeight -= tacticalComplexity;
+        petrosianWeight  -= tacticalComplexity;
+    }
 
     // Apply dynamic weights if the option is enabled
     if (Options["NNUE Dynamic Weights"]) {
@@ -215,17 +260,17 @@ void adjust_nnue_for_style(Style currentStyle) {
 
     switch (currentStyle) {
         case Style::Tal:
-            StrategyMaterialWeight = std::clamp(StrategyMaterialWeight + 5, minWeight, maxWeight);
+            StrategyMaterialWeight   = std::clamp(StrategyMaterialWeight + 5, minWeight, maxWeight);
             StrategyPositionalWeight = std::clamp(StrategyPositionalWeight - 5, minWeight, maxWeight);
             break;
 
         case Style::Petrosian:
-            StrategyMaterialWeight = std::clamp(StrategyMaterialWeight - 5, minWeight, maxWeight);
+            StrategyMaterialWeight   = std::clamp(StrategyMaterialWeight - 5, minWeight, maxWeight);
             StrategyPositionalWeight = std::clamp(StrategyPositionalWeight + 5, minWeight, maxWeight);
             break;
 
         case Style::Capablanca:
-            StrategyMaterialWeight = 15; // Balanced material weight.
+            StrategyMaterialWeight   = 15; // Balanced material weight.
             StrategyPositionalWeight = 15; // Balanced positional weight.
             break;
     }

@@ -121,10 +121,16 @@ Value futility_margin(Depth d, bool noTtCutNode, bool improving, bool oppWorseni
 int Reductions[MAX_MOVES];  // [depth or moveNumber]
 
 // Reduction Function with Shashin Style Adjustments
-Depth reduction(bool improving, Depth depth, int moveNumber, int delta, int rootDelta) {
+Depth reduction(bool improving, Depth depth, int moveNumber, int delta, int rootDelta, int styleAdjustment) {
     int reductionScale = Reductions[depth] * Reductions[moveNumber]; // Base reduction scale.
+    reductionScale += styleAdjustment; // Style-based adjustment to LMR
 
     // Dynamic adjustment based on Shashin style.
+    if (styleAdjustment < 0)
+        reductionScale = reductionScale * (100 + std::abs(styleAdjustment)) / 100;
+    else if (styleAdjustment > 0)
+        reductionScale = reductionScale * 100 / (100 + styleAdjustment);
+
     if (Eval::CurrentStyle.attack > 10) {
         reductionScale = reductionScale * 9 / 10; // Less aggressive reductions for Tal.
     } else if (Eval::CurrentStyle.defense > 10) {
@@ -320,6 +326,10 @@ void MainThread::search() {
         sync_cout << "\nNodes searched: " << nodes << "\n" << sync_endl;
         return;
     }
+
+    // Retrieve current Shashin dynamic weights (Tal, Petrosian, Capablanca)
+    int talWeight = 0, petrosianWeight = 0, capablancaWeight = 0;
+    Eval::NNUE::update_weights_with_blend(rootPos, talWeight, petrosianWeight, capablancaWeight);
 
     // Make sure experience has finished loading
     Experience::wait_for_loading_finished();
@@ -828,6 +838,11 @@ Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, boo
     update_exploration_factor(pos, depth, Time.availableNodes);
     constexpr bool PvNode   = nodeType != NonPV;
     constexpr bool rootNode = nodeType == Root;
+
+    int talWeight = 100, petrosianWeight = 100, capablancaWeight = 100;
+    Eval::NNUE::update_weights_with_blend(pos, talWeight, petrosianWeight, capablancaWeight);
+    int styleAdjustment = (petrosianWeight - talWeight) / 50;
+
 
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)
@@ -1347,7 +1362,7 @@ moves_loop:  // When in check, search starts here
 
         int delta = beta - alpha;
 
-        Depth r = reduction(improving, depth, moveCount, delta, thisThread->rootDelta);
+        Depth r = reduction(improving, depth, moveCount, delta, thisThread->rootDelta, styleAdjustment);
 
         // Step 14. Pruning at shallow depth (~120 Elo).
         // Depth conditions are important for mate finding.
