@@ -1960,6 +1960,11 @@ Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth) {
 
         moveCount++;
 
+        // QSEE filter: skip obviously losing captures that do not give check
+        if (capture && !givesCheck && !pos.see_ge(move, 0)) {
+            continue;
+        }
+
         // Step 6. Pruning
         if (bestValue > VALUE_TB_LOSS_IN_MAX_PLY && pos.non_pawn_material(us))
         {
