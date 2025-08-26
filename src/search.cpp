@@ -843,6 +843,9 @@ Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, boo
     Eval::NNUE::update_weights_with_blend(pos, talWeight, petrosianWeight, capablancaWeight);
     int styleAdjustment = (petrosianWeight - talWeight) / 50;
 
+    // StyleGate: disable style adjustments at shallow depth and early PV plies
+    if (depth < 6 || (PvNode && ss->ply < 2))
+        styleAdjustment = 0;
 
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)
