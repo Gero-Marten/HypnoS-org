@@ -224,6 +224,10 @@ void MovePicker::score() {
                 m.value = (*mainHistory)[pos.side_to_move()][m.from_to()]
                         + (*continuationHistory[0])[pos.moved_piece(m)][m.to_sq()]
                         + (*pawnHistory)[pawn_structure_index(pos)][pos.moved_piece(m)][m.to_sq()];
+
+            // Demote losing quiet evasions using SEE (ordering only)
+            if (!pos.capture_stage(m) && !pos.see_ge(m, 0))
+                m.value -= 200000;
         }
 }
 
