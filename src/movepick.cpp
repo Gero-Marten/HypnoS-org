@@ -29,6 +29,9 @@
 namespace Hypnos {
 
 namespace {
+	
+// Demote losing captures: big penalty for SEE < 0
+static constexpr int LOSER_PENALTY = 200000;
 
 enum Stages {
     // generate main search moves
@@ -166,11 +169,16 @@ void MovePicker::score() {
 
     for (auto& m : *this)
         if constexpr (Type == CAPTURES)
+    {
             m.value =
               (7 * int(PieceValue[pos.piece_on(m.to_sq())])
                + (*captureHistory)[pos.moved_piece(m)][m.to_sq()][type_of(pos.piece_on(m.to_sq()))])
               / 16;
 
+        // Demote obviously losing captures based on SEE
+        if (!pos.see_ge(m, 0))
+            m.value -= LOSER_PENALTY;
+    }
         else if constexpr (Type == QUIETS)
         {
             Piece     pc   = pos.moved_piece(m);
@@ -216,6 +224,10 @@ void MovePicker::score() {
                 m.value = (*mainHistory)[pos.side_to_move()][m.from_to()]
                         + (*continuationHistory[0])[pos.moved_piece(m)][m.to_sq()]
                         + (*pawnHistory)[pawn_structure_index(pos)][pos.moved_piece(m)][m.to_sq()];
+
+            // Demote losing quiet evasions using SEE (ordering only)
+            if (!pos.capture_stage(m) && !pos.see_ge(m, 0))
+                m.value -= 200000;
         }
 }
 

@@ -843,6 +843,9 @@ Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, boo
     Eval::NNUE::update_weights_with_blend(pos, talWeight, petrosianWeight, capablancaWeight);
     int styleAdjustment = (petrosianWeight - talWeight) / 50;
 
+    // StyleGate: disable style adjustments at shallow depth and early PV plies
+    if (depth < 6 || (PvNode && ss->ply < 2))
+        styleAdjustment = 0;
 
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)
@@ -1299,11 +1302,16 @@ Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, boo
 
 moves_loop:  // When in check, search starts here
 
-    // Step 12. A small Probcut idea, when we are in check (~4 Elo)
+    // Step 12. Small ProbCut when we are in check (~4 Elo)
+    // Trigger only if TT says the capture line is clearly above beta and the score is not a TB win.
     probCutBeta = beta + 409;
-    if (ss->inCheck && !PvNode && ttCapture && (tte->bound() & BOUND_LOWER)
-        && tte->depth() >= depth - 4 && ttValue >= probCutBeta
-        && std::abs(ttValue) < VALUE_TB_WIN_IN_MAX_PLY && std::abs(beta)&& std::abs(ttValue) < VALUE_TB_WIN_IN_MAX_PLY && (tte->bound() & BOUND_LOWER) < VALUE_TB_WIN_IN_MAX_PLY)
+    if (ss->inCheck
+        && !PvNode
+        && ttCapture
+        && (tte->bound() & BOUND_LOWER)
+        && tte->depth() >= depth - 4
+        && ttValue >= probCutBeta
+        && std::abs(ttValue) < VALUE_TB_WIN_IN_MAX_PLY)
         return probCutBeta;
 
     const PieceToHistory* contHist[] = {(ss - 1)->continuationHistory,
@@ -1363,6 +1371,28 @@ moves_loop:  // When in check, search starts here
         int delta = beta - alpha;
 
         Depth r = reduction(improving, depth, moveCount, delta, thisThread->rootDelta, styleAdjustment);
+
+        // LMR smart clamp: slightly shrink reduction for countermove quiets
+        if (!capture && !givesCheck && move == countermove)
+        {
+            if (r > 0) r -= 1;
+        }
+
+        // LMR smart clamp: slightly shrink reduction for good quiet moves
+        if (!capture && !givesCheck)
+        {
+            // Favor killers
+            if (move == ss->killers[0] || move == ss->killers[1])
+            {
+                if (r > 0) r -= 1;
+            }
+            else
+            {
+                // Favor high-history quiets
+                int hh = thisThread->mainHistory[us][move.from_to()];
+                if (hh > 8000 && r > 0) r -= 1;
+            }
+        }
 
         // Step 14. Pruning at shallow depth (~120 Elo).
         // Depth conditions are important for mate finding.
@@ -1505,9 +1535,6 @@ moves_loop:  // When in check, search starts here
             else if (PvNode && move == ttMove && move.to_sq() == prevSq
                      && captureHistory[movedPiece][move.to_sq()][type_of(pos.piece_on(move.to_sq()))]
                           > 4026)
-              extension = 1;
-
-          else if ((ss-1)->currentMove == Move::null() && abs(ss->staticEval - (ss-1)->staticEval) > 900)
               extension = 1;
       }
 
@@ -1956,6 +1983,11 @@ Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth) {
         capture    = pos.capture_stage(move);
 
         moveCount++;
+
+        // QSEE filter: skip obviously losing captures that do not give check
+        if (capture && !givesCheck && !pos.see_ge(move, 0)) {
+            continue;
+        }
 
         // Step 6. Pruning
         if (bestValue > VALUE_TB_LOSS_IN_MAX_PLY && pos.non_pawn_material(us))
