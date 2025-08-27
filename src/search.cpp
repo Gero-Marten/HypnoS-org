@@ -840,8 +840,26 @@ Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, boo
     constexpr bool rootNode = nodeType == Root;
 
     int talWeight = 100, petrosianWeight = 100, capablancaWeight = 100;
-    Eval::NNUE::update_weights_with_blend(pos, talWeight, petrosianWeight, capablancaWeight);
-    int styleAdjustment = (petrosianWeight - talWeight) / 50;
+																							 
+    int styleAdjustment = 0;
+
+    // Shashin fast-path: when dynamic style is OFF, skip the expensive blend.
+    // Compute a cheap static adjustment from the selected style instead.
+    if (!Options["Shashin Dynamic Style"])
+    {
+        const std::string styleName = std::string(Options["Use Shashin Style"]); // "Tal" | "Capablanca" | "Petrosian"
+        if (styleName == "Tal")
+            styleAdjustment = -2;
+        else if (styleName == "Petrosian")
+            styleAdjustment = +2;
+        else // "Capablanca"
+            styleAdjustment = 0;
+    }
+    else
+    {
+        Eval::NNUE::update_weights_with_blend(pos, talWeight, petrosianWeight, capablancaWeight);
+        styleAdjustment = (petrosianWeight - talWeight) / 50;
+    }
 
     // StyleGate: disable style adjustments at shallow depth and early PV plies
     if (depth < 6 || (PvNode && ss->ply < 2))
