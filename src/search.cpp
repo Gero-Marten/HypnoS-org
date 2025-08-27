@@ -53,6 +53,10 @@
 namespace Hypnos {
 
 namespace Search {
+	
+// Shashin: cached per-thread flags for static style fast-path
+[[maybe_unused]] static thread_local bool ShashinDynamicCached = true;
+[[maybe_unused]] static thread_local int  ShashinStaticAdjCached = 0;
 
 double exploration_factor = 0.2;            // Default exploration factor, controls search exploration.
 double exploration_decay_factor = 1.0;      // Decay factor for exploration, adjusts dynamically.
@@ -838,27 +842,33 @@ Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, boo
     update_exploration_factor(pos, depth, Time.availableNodes);
     constexpr bool PvNode   = nodeType != NonPV;
     constexpr bool rootNode = nodeType == Root;
-
-    int talWeight = 100, petrosianWeight = 100, capablancaWeight = 100;
-																							 
-    int styleAdjustment = 0;
-
-    // Shashin fast-path: when dynamic style is OFF, skip the expensive blend.
-    // Compute a cheap static adjustment from the selected style instead.
-    if (!Options["Shashin Dynamic Style"])
+	
+    // Shashin: refresh cached flags once at root
+    if (rootNode && ss->ply == 0)
+    {
+    Search::ShashinDynamicCached = bool(Options["Shashin Dynamic Style"]);
+    if (!Search::ShashinDynamicCached)
     {
         const std::string styleName = std::string(Options["Use Shashin Style"]); // "Tal" | "Capablanca" | "Petrosian"
         if (styleName == "Tal")
-            styleAdjustment = -2;
+            Search::ShashinStaticAdjCached = -2;
         else if (styleName == "Petrosian")
-            styleAdjustment = +2;
-        else // "Capablanca"
-            styleAdjustment = 0;
+            Search::ShashinStaticAdjCached = +2;
+        else
+            Search::ShashinStaticAdjCached = 0; // Capablanca or default
     }
+}
+
+    int talWeight = 100, petrosianWeight = 100, capablancaWeight = 100;
+    int styleAdjustment = 0;
+
+    // Shashin fast-path: use cached flags to avoid per-node option/string lookups
+    if (!Search::ShashinDynamicCached)
+        styleAdjustment = Search::ShashinStaticAdjCached;
     else
     {
-        Eval::NNUE::update_weights_with_blend(pos, talWeight, petrosianWeight, capablancaWeight);
-        styleAdjustment = (petrosianWeight - talWeight) / 50;
+    Eval::NNUE::update_weights_with_blend(pos, talWeight, petrosianWeight, capablancaWeight);
+    styleAdjustment = (petrosianWeight - talWeight) / 50;
     }
 
     // StyleGate: disable style adjustments at shallow depth and early PV plies
