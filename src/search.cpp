@@ -1372,6 +1372,12 @@ moves_loop:  // When in check, search starts here
 
         Depth r = reduction(improving, depth, moveCount, delta, thisThread->rootDelta, styleAdjustment);
 
+        // LMR smart clamp: slightly shrink reduction for countermove quiets
+        if (!capture && !givesCheck && move == countermove)
+        {
+            if (r > 0) r -= 1;
+        }
+
         // LMR smart clamp: slightly shrink reduction for good quiet moves
         if (!capture && !givesCheck)
         {
