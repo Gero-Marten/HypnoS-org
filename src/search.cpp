@@ -1302,11 +1302,16 @@ Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, boo
 
 moves_loop:  // When in check, search starts here
 
-    // Step 12. A small Probcut idea, when we are in check (~4 Elo)
+    // Step 12. Small ProbCut when we are in check (~4 Elo)
+    // Trigger only if TT says the capture line is clearly above beta and the score is not a TB win.
     probCutBeta = beta + 409;
-    if (ss->inCheck && !PvNode && ttCapture && (tte->bound() & BOUND_LOWER)
-        && tte->depth() >= depth - 4 && ttValue >= probCutBeta
-        && std::abs(ttValue) < VALUE_TB_WIN_IN_MAX_PLY && std::abs(beta)&& std::abs(ttValue) < VALUE_TB_WIN_IN_MAX_PLY && (tte->bound() & BOUND_LOWER) < VALUE_TB_WIN_IN_MAX_PLY)
+    if (ss->inCheck
+        && !PvNode
+        && ttCapture
+        && (tte->bound() & BOUND_LOWER)
+        && tte->depth() >= depth - 4
+        && ttValue >= probCutBeta
+        && std::abs(ttValue) < VALUE_TB_WIN_IN_MAX_PLY)
         return probCutBeta;
 
     const PieceToHistory* contHist[] = {(ss - 1)->continuationHistory,
