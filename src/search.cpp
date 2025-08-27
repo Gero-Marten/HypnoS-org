@@ -1367,6 +1367,22 @@ moves_loop:  // When in check, search starts here
 
         Depth r = reduction(improving, depth, moveCount, delta, thisThread->rootDelta, styleAdjustment);
 
+        // LMR smart clamp: slightly shrink reduction for good quiet moves
+        if (!capture && !givesCheck)
+        {
+            // Favor killers
+            if (move == ss->killers[0] || move == ss->killers[1])
+            {
+                if (r > 0) r -= 1;
+            }
+            else
+            {
+                // Favor high-history quiets
+                int hh = thisThread->mainHistory[us][move.from_to()];
+                if (hh > 8000 && r > 0) r -= 1;
+            }
+        }
+
         // Step 14. Pruning at shallow depth (~120 Elo).
         // Depth conditions are important for mate finding.
         if (!rootNode && pos.non_pawn_material(us) && bestValue > VALUE_TB_LOSS_IN_MAX_PLY)
