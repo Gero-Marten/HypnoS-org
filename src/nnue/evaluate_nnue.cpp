@@ -44,12 +44,83 @@
 #include "../uci.h"
 #include "nnue_accumulator.h"
 #include "nnue_common.h"
-#include "evaluate_nnue.h"
 
 namespace Hypnos::Eval::NNUE {
 
+// --- Single-value little-endian wrappers -------------------------------------
+// Bridge calls like read_little_endian<uint32_t>(is) / write_little_endian<uint32_t>(os, v)
+// to the pointer-based helpers declared in nnue_common.h.
+template<typename IntType>
+inline IntType read_le(std::istream& stream) {
+    IntType v{};
+    read_little_endian(stream, &v, 1);
+    return v;
+}
+
+template<typename IntType>
+inline void write_le(std::ostream& stream, IntType v) {
+    write_little_endian(stream, &v, 1);
+}
+
+#ifdef DEBUG_SHASHIN
+// Debug helper for Shashin dynamic blend weights.
+// It is called only after the cache has been updated, minimizing noisy logs.
+static inline void debug_shashin_weights(const Position& pos, int tal, int pet, int cap, int phase) {
+    // Log one compact line; avoid expensive formatting.
+    sync_cout << "info string SHASHIN phase=" << phase
+              << " T=" << tal << " P=" << pet << " C=" << cap
+              << " key=" << (unsigned long long)pos.key()
+              << sync_endl;
+}
+#else
+// No-op when DEBUG_SHASHIN is not defined.
+static inline void debug_shashin_weights(const Position&, int, int, int, int) {}
+#endif
+	
+// Cache for dynamic Shashin blend weights (thread-local, per search thread).
+// Purpose: avoid recomputing Tal/Capablanca/Petrosian weights when the position key
+// and the detected dynamic phase did not change since the last evaluation.
+struct ShashinBlendCache {
+    Key key;      // Position Zobrist key used as cache key
+    int phase;    // Dynamic phase used for the last computed blend
+    int tal;      // Cached Tal weight
+    int pet;      // Cached Petrosian weight
+    int cap;      // Cached Capablanca weight
+};
+
+// One cache per thread to avoid cross-thread contamination.
+static thread_local ShashinBlendCache gBlendCache{ Key(0), -1, -1, -1, -1 };
+
+// Small helper to update the cache atomically.
+static inline void update_blend_cache(const Position& pos, int phase, int tal, int pet, int cap) {
+    gBlendCache.key   = pos.key();
+    gBlendCache.phase = phase;
+    gBlendCache.tal   = tal;
+    gBlendCache.pet   = pet;
+    gBlendCache.cap   = cap;
+}
+
+// Small helper to check if current state matches the cache.
+static inline bool blend_cache_hit(const Position& pos, int phase) {
+    return gBlendCache.key == pos.key() && gBlendCache.phase == phase;
+}
+
 int StrategyMaterialWeight = 0;
 int StrategyPositionalWeight = 0;
+
+// Commit helper for Strategy* weights (thread-local dedup).
+// Purpose: avoid unnecessary writes/logging when values do not change between nodes.
+static thread_local int gLastCommittedMaterialWeight  = -9999;
+static thread_local int gLastCommittedPositionalWeight = -9999;
+
+static inline void commit_strategy_weights(int materialW, int positionalW) {
+    if (materialW == gLastCommittedMaterialWeight && positionalW == gLastCommittedPositionalWeight)
+        return;
+    StrategyMaterialWeight   = materialW;
+    StrategyPositionalWeight = positionalW;
+    gLastCommittedMaterialWeight  = materialW;
+    gLastCommittedPositionalWeight = positionalW;
+}
 
 // Thresholds for Game Phases
 constexpr int thresholdForEndgame = 1300;  // Material threshold for endgame phase.
@@ -72,11 +143,16 @@ int calculate_material(const Position& pos) {
     return material; // Return the total material value.
 }
 
-// Determine Dynamic Game Phase
-int determine_dynamic_phase(const Position& pos) {
-    static int stablePhase = 0;              // Default to opening phase.
-    static int stabilityCounter = 0;         // Tracks iterations for phase changes.
+    // Determine Dynamic Game Phase
+    int determine_dynamic_phase(const Position& pos) {
+    // Use thread_local to avoid cross-thread state contamination in multi-threaded search.
+    static thread_local int stablePhase = 0;       // Default to opening phase.
+    static thread_local int stabilityCounter = 0;  // Tracks iterations for phase changes.
     constexpr int stabilityThreshold = 3;    // Required iterations for phase stability.
+
+    // Debounce to avoid immediate flip/flop after a phase change.
+    static thread_local int phaseChangeCooldown = 0;  // Counts down after a phase switch
+    constexpr int cooldownMax = 4;                    // How many calls to wait after a change
 
     // Calculate the remaining material on the board.
     int remainingMaterial = calculate_material(pos);
@@ -89,15 +165,24 @@ int determine_dynamic_phase(const Position& pos) {
         currentPhase = 1; // Middlegame.
     }
 
+    // If we are in cooldown and a different phase is detected, keep the current stable phase.
+    if (phaseChangeCooldown > 0 && currentPhase != stablePhase) {
+        --phaseChangeCooldown;               // Gradually expire cooldown
+        return stablePhase;                  // Do not allow a new switch yet
+    }
+
     // Update stable phase if the current phase remains consistent.
     if (currentPhase != stablePhase) {
         stabilityCounter++;                  // Increment stability counter for phase change.
         if (stabilityCounter >= stabilityThreshold) {
-            stablePhase = currentPhase;      // Update the stable phase after threshold is met.
+            stablePhase = currentPhase;      // Commit the phase change.
             stabilityCounter = 0;            // Reset the counter.
+            phaseChangeCooldown = cooldownMax; // Start cooldown to prevent immediate flip back.
         }
     } else {
         stabilityCounter = 0;                // Reset the counter if phase is stable.
+        if (phaseChangeCooldown > 0)
+            --phaseChangeCooldown;           // Let cooldown naturally decay while stable.
     }
 
     return stablePhase;                      // Return the stabilized game phase.
@@ -123,135 +208,167 @@ void apply_dynamic_blend(int talWeight, int petrosianWeight, int capablancaWeigh
 
 // Update Dynamic Weights Based on Game Phase and Position
 void update_weights(int phase, const Position& pos, int& talWeight, int& petrosianWeight, int& capablancaWeight) {
-	
-    if (!Eval::style_is_enabled()) {
-        return; // Skip dynamic NNUE style weight adjustment
-    }
-    static int lastPhase = -1;                      // Track the last phase to avoid redundant updates.
-    static int lastTalWeight = -1, lastPetrosianWeight = -1, lastCapablancaWeight = -1;
 
-    // Skip redundant updates if phase and weights have not changed.
-    if (phase == lastPhase && talWeight == lastTalWeight &&
-        petrosianWeight == lastPetrosianWeight && capablancaWeight == lastCapablancaWeight) {
+    // Honor global switches before doing any work.
+    // 1) If Shashin style is disabled, do not touch strategy weights.
+    if (!Eval::style_is_enabled())
         return;
-    }
 
-    // Update the last recorded state.
-    lastPhase = phase;
-    lastTalWeight = talWeight;
-    lastPetrosianWeight = petrosianWeight;
-    lastCapablancaWeight = capablancaWeight;
+    // 2) If ManualWeights are enabled, do not override user-defined strategy weights.
+    if ((bool)Options["NNUE ManualWeights"])
+        return;
 
-    // Compute positional indicators for the position.
+    // Use thread_local to avoid cross-thread contamination across search threads.
+    static thread_local int lastPhase = -1;            // Track last phase per thread.
+    static thread_local int lastTalWeight = -1;
+    static thread_local int lastPetrosianWeight = -1;
+    static thread_local int lastCapablancaWeight = -1;
+
+    // Fast path: skip work if inputs and phase didn't change since last call (per thread).
+    if (phase == lastPhase
+        && talWeight == lastTalWeight
+        && petrosianWeight == lastPetrosianWeight
+        && capablancaWeight == lastCapablancaWeight)
+        return;
+
+    // Compute positional indicators for the position (kept for future heuristics).
     PositionalIndicators indicators = compute_positional_indicators(pos);
+    (void)indicators;
 
-    // Dynamic blend of weights based on the game phase.
-    float phaseFactor = phase / 100.0f; // Normalize phase between 0 (endgame) and 1 (opening).
-    talWeight = static_cast<int>((1 - phaseFactor) * indicators.centerDominance + phaseFactor * indicators.kingSafety);
-    capablancaWeight = static_cast<int>((1 - phaseFactor) * indicators.materialImbalance + phaseFactor * indicators.centerControl);
-    petrosianWeight = static_cast<int>((1 - phaseFactor) * indicators.flankControl + phaseFactor * indicators.pieceActivity);
+    // Assign weights based on the current phase of the game (compute, then commit).
+    int newMaterialWeight = 0;
+    int newPositionalWeight = 0;
 
-    // Add final adjustments to dynamic weights.
-    talWeight += calculate_tal_weight(pos, indicators);
-    capablancaWeight += calculate_capablanca_weight(pos, indicators);
-    petrosianWeight += calculate_petrosian_weight(pos, indicators);
-
-    // Normalize the weights to keep them within a reasonable total
-    int total = talWeight + capablancaWeight + petrosianWeight;
-
-    if (total > 0) {
-        float scale = 300.0f / total; // Target total weight, adjustable
-        talWeight        = int(talWeight * scale);
-        capablancaWeight = int(capablancaWeight * scale);
-        petrosianWeight  = int(petrosianWeight * scale);
-    }
-
-    // Use manual weights if the "ManualWeights" option is enabled.
-    if (Options["NNUE ManualWeights"]) {
-        StrategyMaterialWeight = Options["NNUE StrategyMaterialWeight"];
-        StrategyPositionalWeight = Options["NNUE StrategyPositionalWeight"];
-        return;
-    }
-
-    // Assign weights based on the current phase of the game
     switch (phase) {
         case 0:  // Opening phase
-            StrategyMaterialWeight = (talWeight * 2 + petrosianWeight) / 3; // Emphasize Tal's influence.
-            StrategyPositionalWeight = (capablancaWeight * 2 + petrosianWeight) / 3; // Balance Capablanca and Petrosian.
+            // Emphasize Tal's influence for material; balance Capablanca/Petrosian for positional.
+            newMaterialWeight   = (talWeight * 2 + petrosianWeight) / 3;
+            newPositionalWeight = (capablancaWeight * 2 + petrosianWeight) / 3;
             break;
 
         case 1:  // Middlegame phase
-            StrategyMaterialWeight = (talWeight + petrosianWeight + capablancaWeight) / 3; // Equal influence of all styles.
-            StrategyPositionalWeight = (talWeight + petrosianWeight + capablancaWeight) / 3; // Balanced weight distribution.
+            // Equal influence of all styles.
+            newMaterialWeight   = (talWeight + petrosianWeight + capablancaWeight) / 3;
+            newPositionalWeight = (talWeight + petrosianWeight + capablancaWeight) / 3;
             break;
 
         case 2:  // Endgame phase
-            StrategyMaterialWeight = (petrosianWeight * 2 + capablancaWeight) / 3; // Focus on Petrosian's defensive approach.
-            StrategyPositionalWeight = (capablancaWeight * 2 + talWeight) / 3; // Combine Capablanca's balance with Tal's activity.
+            // Focus on Petrosian for material; combine Capablanca with a touch of Tal for positional.
+            newMaterialWeight   = (petrosianWeight * 2 + capablancaWeight) / 3;
+            newPositionalWeight = (capablancaWeight * 2 + talWeight) / 3;
             break;
 
         default:
             return; // Exit if the phase is invalid.
     }
+
+    // Commit deduplicated write (only if values changed).
+    commit_strategy_weights(newMaterialWeight, newPositionalWeight);
+
+    // Update last-seen state for next calls (inputs that trigger the fast path).
+    lastPhase = phase;
+    lastTalWeight = talWeight;
+    lastPetrosianWeight = petrosianWeight;
+    lastCapablancaWeight = capablancaWeight;
 }
 
 // Function to update weights with dynamic blending
 void update_weights_with_blend(const Position& pos, int& talWeight, int& petrosianWeight, int& capablancaWeight) {
-	
-    if (!Eval::style_is_enabled()) {
-        return; // Skip NNUE weight blending if style is Off
+
+    // Early exits and fast path:
+    if (!Eval::style_is_enabled())
+        return;
+
+    // ManualWeights: on_change UCI già applica i pesi, non fare altro.
+    if ((bool)Hypnos::Options["NNUE ManualWeights"])
+        return;
+
+    // 1) Fase dinamica + tentativo di cache hit
+    const int dynamicPhase = determine_dynamic_phase(pos);
+    if (blend_cache_hit(pos, dynamicPhase)) {
+        talWeight        = gBlendCache.tal;
+        petrosianWeight  = gBlendCache.pet;
+        capablancaWeight = gBlendCache.cap;
+        return;
     }
 
-    int dynamicPhase = determine_dynamic_phase(pos); // Determine the dynamic phase of the game.
-    PositionalIndicators indicators = compute_positional_indicators(pos); // Compute positional indicators.
-
-    // Compute Tactical Complexity Factor (TCF)
+    // 2) Tactical Complexity Factor (leggero)
     int tacticalComplexity = 0;
+    tacticalComplexity += 2 * popcount(pos.checkers());
 
-    // Determine side to move and opposite
-    Color us   = pos.side_to_move();
-    Color them = ~us;
-    Square usKing   = pos.king_square(us);
-    Square themKing = pos.king_square(them);
+    const Color  us   = pos.side_to_move();
+    const Color  them = ~us;
+    const Square kUs   = pos.king_square(us);
+    const Square kThem = pos.king_square(them);
 
-    // Count attackers on both kings
-    tacticalComplexity += popcount(pos.attackers_to(usKing)) * 2;
-    tacticalComplexity += popcount(pos.attackers_to(themKing)) * 2;
+    tacticalComplexity += popcount(pos.attackers_to(kUs))   * 2;
+    tacticalComplexity += popcount(pos.attackers_to(kThem)) * 2;
 
-    // Add tactical tension from available non-pawn captures
-    for (Move m : MoveList<LEGAL>(pos)) {
-        Square to = m.to_sq();
-        Piece captured = pos.piece_on(to);
-        if (type_of(captured) != NO_PIECE_TYPE &&
-            type_of(captured) != PAWN &&
-            m.type_of() != CASTLING &&
-            m.type_of() != PROMOTION)
-        {
-            tacticalComplexity += 1;
+    Bitboard oppPieces = pos.pieces(them);
+    while (oppPieces) {
+        const Square   sq  = pop_lsb(oppPieces);
+        const Bitboard atk = pos.attackers_to(sq);
+        const int attackersUs = popcount(atk & pos.pieces(us));
+        const int defenders   = popcount(atk & pos.pieces(them));
+
+        if (attackersUs > 0)
+            ++tacticalComplexity;       // tensione di cattura
+        if (attackersUs > 0 && defenders == 0)
+            ++tacticalComplexity;       // pezzo appeso
+    }
+    tacticalComplexity = std::clamp(tacticalComplexity, 0, 12);
+
+    // 3) Pesi “raw” dalla tua logica centralizzata
+    Eval::apply_dynamic_shashin_weights(talWeight, petrosianWeight, capablancaWeight, pos);
+
+    // 4) Aggiustamento guidato da fase + indicatori (ammorbidito)
+    {
+        const PositionalIndicators indicators = compute_positional_indicators(pos);
+        const float phaseFactor = dynamicPhase / 100.0f; // 0=endgame, 1=opening
+
+        const int targetTal        = int((1.0f - phaseFactor) * indicators.centerDominance   + phaseFactor * indicators.kingSafety);
+        const int targetCapablanca = int((1.0f - phaseFactor) * indicators.materialImbalance + phaseFactor * indicators.centerControl);
+        const int targetPetrosian  = int((1.0f - phaseFactor) * indicators.flankControl      + phaseFactor * indicators.pieceActivity);
+
+        talWeight        = (talWeight        + targetTal)        / 2;
+        capablancaWeight = (capablancaWeight + targetCapablanca) / 2;
+        petrosianWeight  = (petrosianWeight  + targetPetrosian)  / 2;
+
+        if (tacticalComplexity > 0) {
+            talWeight        += tacticalComplexity * 2;
+            capablancaWeight -= tacticalComplexity;
+            petrosianWeight  -= tacticalComplexity;
         }
+
+        if ((bool)Hypnos::Options["NNUE Dynamic Weights"])
+            update_weights(dynamicPhase, pos, talWeight, petrosianWeight, capablancaWeight);
+        else
+            update_weights(/*defaultPhase=*/1, pos, talWeight, petrosianWeight, capablancaWeight);
     }
 
-    // Dynamic blend based on the phase of the game
-    float phaseFactor = dynamicPhase / 100.0f; // Normalize the phase to a value between 0 (endgame) and 1 (opening).
-    talWeight        = static_cast<int>((1 - phaseFactor) * indicators.centerDominance + phaseFactor * indicators.kingSafety);
-    capablancaWeight = static_cast<int>((1 - phaseFactor) * indicators.materialImbalance + phaseFactor * indicators.centerControl);
-    petrosianWeight  = static_cast<int>((1 - phaseFactor) * indicators.flankControl + phaseFactor * indicators.pieceActivity);
+    // 5) Clamp, normalizza e cache
+    talWeight        = std::clamp(talWeight,        0, 100);
+    petrosianWeight  = std::clamp(petrosianWeight,  0, 100);
+    capablancaWeight = std::clamp(capablancaWeight, 0, 100);
 
-    // Apply Tactical Complexity boost to Tal and adjust others
-    if (tacticalComplexity > 0) {
-        talWeight        += tacticalComplexity * 2;
-        capablancaWeight -= tacticalComplexity;
-        petrosianWeight  -= tacticalComplexity;
+    const int total = talWeight + petrosianWeight + capablancaWeight;
+    if (total > 0 && total != 100) {
+        const int newTal       = (talWeight       * 100 + total / 2) / total;
+        const int newPet       = (petrosianWeight * 100 + total / 2) / total;
+        const int sumFirstTwo  = newTal + newPet;
+        const int newCap       = std::clamp(100 - sumFirstTwo, 0, 100);
+
+        talWeight        = newTal;
+        petrosianWeight  = newPet;
+        capablancaWeight = newCap;
     }
 
-    // Apply dynamic weights if the option is enabled
-    if (Options["NNUE Dynamic Weights"]) {
-        update_weights(dynamicPhase, pos, talWeight, petrosianWeight, capablancaWeight); // Update weights dynamically.
-    } else {
-        int defaultPhase = 1; // Default to middlegame weights if dynamic blending is disabled.
-        update_weights(defaultPhase, pos, talWeight, petrosianWeight, capablancaWeight); // Apply default weights.
-    }
+    update_blend_cache(pos, dynamicPhase, talWeight, petrosianWeight, capablancaWeight);
+#ifdef DEBUG_SHASHIN
+    debug_shashin_weights(pos, talWeight, petrosianWeight, capablancaWeight, dynamicPhase);
+#endif
 }
+// ---------------------------------------------------------------------------
 
 // Adjust NNUE Weights Based on Current Style
 void adjust_nnue_for_style(Style currentStyle) {
@@ -314,7 +431,7 @@ template<typename T>
 bool read_parameters(std::istream& stream, T& reference) {
 
     std::uint32_t header;
-    header = read_little_endian<std::uint32_t>(stream);
+    header = read_le<std::uint32_t>(stream);
     if (!stream || header != T::get_hash_value())
         return false;
     return reference.read_parameters(stream);
@@ -364,9 +481,9 @@ static bool read_header(std::istream& stream, std::uint32_t* hashValue, std::str
 
 // Write network header
 static bool write_header(std::ostream& stream, std::uint32_t hashValue, const std::string& desc) {
-    write_little_endian<std::uint32_t>(stream, Version);
-    write_little_endian<std::uint32_t>(stream, hashValue);
-    write_little_endian<std::uint32_t>(stream, std::uint32_t(desc.size()));
+    write_le<std::uint32_t>(stream, Version);
+    write_le<std::uint32_t>(stream, hashValue);
+    write_le<std::uint32_t>(stream, std::uint32_t(desc.size()));
     stream.write(&desc[0], desc.size());
     return !stream.fail();
 }

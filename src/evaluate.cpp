@@ -254,16 +254,24 @@ int compute_material_imbalance(const Position& pos) {
 }
 
 int compute_center_control(const Position& pos) {
-    // Evaluate control over central squares.
+    // Measure control over the four central squares (D4, E4, D5, E5)
+    // using ATTACKERS rather than mere occupancy. Positive values favor White,
+    // negative values favor Black. This produces a signal that correlates
+    // with initiative and piece activity in the center, which is what Shashin wants.
     Square centralSquares[] = { SQ_D4, SQ_E4, SQ_D5, SQ_E5 };
     int control = 0;
 
     for (Square sq : centralSquares) {
-        // Increment control if a piece occupies the square.
-        if (pos.piece_on(sq) != NO_PIECE) {
-            control++;
-        }
+        // Count white and black attackers to the square.
+        // We intersect the attackers bitboard with each side's pieces;
+        // this is consistent with other helpers in your codebase.
+        const int w = popcount(pos.attackers_to(sq) & pos.pieces(WHITE));
+        const int b = popcount(pos.attackers_to(sq) & pos.pieces(BLACK));
+
+        // Net control contribution for this square.
+        control += (w - b);
     }
+
     return control;
 }
 

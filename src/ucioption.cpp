@@ -117,39 +117,173 @@ void init(OptionsMap& o) {
     o["UCI_LimitStrength"] << Option(false);
     o["UCI_Elo"] << Option(1320, 1320, 3190);
     o["UCI_ShowWDL"] << Option(false);
-    o["Book File"] << Option("<empty>", on_book);
-    o["Book Width"] << Option(1, 1, 20);
-    o["Book Depth"] << Option(255, 1, 255);
-    o["SyzygyPath"] << Option("<empty>", on_tb_path);
-    o["SyzygyProbeDepth"] << Option(1, 1, 100);
-    o["Syzygy50MoveRule"] << Option(true);
-    o["SyzygyProbeLimit"] << Option(7, 0, 7);
-    o["Experience Enabled"] << Option(false, on_exp_enabled);
-    o["Experience File"] << Option("Hypnos.exp", on_exp_file);
-    o["Experience Readonly"] << Option(false);
-    o["Experience Book"] << Option(false);
-    o["Experience Book Width"] << Option(1, 1, 20);
-    o["Experience Book Eval Importance"] << Option(5, 0, 10);
-    o["Experience Book Min Depth"] << Option(27, Experience::MinDepth, 64);
-    o["Experience Book Max Moves"] << Option(16, 1, 100);
-    o["EvalFile"] << Option(EvalFileDefaultNameBig, on_eval_file);
-    o["EvalFileSmall"] << Option(EvalFileDefaultNameSmall, on_eval_file);
-    o["Variety"] << Option(0, 0, 40);
-    o["Variety Max Score"] << Option(0, 0, 50);
-    o["Variety Max Moves"] << Option(0, 0, 40);    // Manual Weight Adjustment Option
-    o["NNUE ManualWeights"] << Option(false, [](const Option& opt) {
-    // Check if Manual Weights option is enabled or disabled.
-     if (opt) {
-        sync_cout << "info string NNUE ManualWeights enabled. Using user-defined weights." << sync_endl;
-    } else {
-        sync_cout << "info string NNUE ManualWeights disabled. Using dynamic weights." << sync_endl;
-    }
-});
+    o["Book File"] 
+        << Option("<empty>", [](const Option& opt) {
+            on_book(opt);
+            sync_cout << "info string Book File = " << (std::string)opt << sync_endl;
+        });
 
-    o["NNUE StrategyMaterialWeight"] 
-        << Option(0, -12, 12, on_strategy_material_weight); // Material weight adjustment.
-    o["NNUE StrategyPositionalWeight"] 
-        << Option(0, -12, 12, on_strategy_positional_weight); // Positional weight adjustment.
+    o["Book Width"] 
+        << Option(1, 1, 20, [](const Option& opt) {
+            sync_cout << "info string Book Width = " << int(opt) << sync_endl;
+        });
+
+    o["Book Depth"] 
+        << Option(255, 1, 255, [](const Option& opt) {
+            sync_cout << "info string Book Depth = " << int(opt) << sync_endl;
+        });
+
+    o["SyzygyPath"] 
+        << Option("<empty>", [](const Option& opt) {
+            on_tb_path(opt);
+            sync_cout << "info string SyzygyPath = " << (std::string)opt << sync_endl;
+        });
+
+    o["SyzygyProbeDepth"] 
+        << Option(1, 1, 100, [](const Option& opt) {
+            sync_cout << "info string SyzygyProbeDepth = " << int(opt) << sync_endl;
+        });
+
+    o["Syzygy50MoveRule"] 
+        << Option(true, [](const Option& opt) {
+            sync_cout << "info string Syzygy50MoveRule is now: "
+                      << (opt ? "enabled" : "disabled") << sync_endl;
+        });
+
+    o["SyzygyProbeLimit"] 
+        << Option(7, 0, 7, [](const Option& opt) {
+            sync_cout << "info string SyzygyProbeLimit = " << int(opt) << " men" << sync_endl;
+        });
+
+    o["Experience Enabled"] 
+        << Option(false, [](const Option& opt) {
+            on_exp_enabled(opt);
+            sync_cout << "info string Experience Enabled is now: "
+                      << (opt ? "enabled" : "disabled") << sync_endl;
+        });
+
+    o["Experience File"] 
+        << Option("Hypnos.exp", [](const Option& opt) {
+            on_exp_file(opt);
+            sync_cout << "info string Experience File = " << (std::string)opt << sync_endl;
+        });
+
+    o["Experience Readonly"] 
+        << Option(false, [](const Option& opt) {
+            sync_cout << "info string Experience Readonly is now: "
+                      << (opt ? "enabled" : "disabled") << sync_endl;
+        });
+
+    o["Experience Book"] 
+        << Option(false, [](const Option& opt) {
+            sync_cout << "info string Experience Book is now: "
+                      << (opt ? "enabled" : "disabled") << sync_endl;
+        });
+
+    o["Experience Book Width"] 
+        << Option(1, 1, 20, [](const Option& opt) {
+            sync_cout << "info string Experience Book Width = " << int(opt) << sync_endl;
+        });
+
+    o["Experience Book Eval Importance"] 
+        << Option(5, 0, 10, [](const Option& opt) {
+            sync_cout << "info string Experience Book Eval Importance = " << int(opt) << sync_endl;
+        });
+
+    o["Experience Book Min Depth"] 
+        << Option(27, Experience::MinDepth, 64, [](const Option& opt) {
+            sync_cout << "info string Experience Book Min Depth = " << int(opt) << sync_endl;
+        });
+
+    o["Experience Book Max Moves"] 
+        << Option(16, 1, 100, [](const Option& opt) {
+            sync_cout << "info string Experience Book Max Moves = " << int(opt) << sync_endl;
+        });
+
+    o["EvalFile"] 
+        << Option(EvalFileDefaultNameBig, [](const Option& opt) {
+            on_eval_file(opt);
+            sync_cout << "info string EvalFile = " << (std::string)opt << sync_endl;
+        });
+
+    o["EvalFileSmall"] 
+        << Option(EvalFileDefaultNameSmall, [](const Option& opt) {
+            on_eval_file(opt);
+            sync_cout << "info string EvalFileSmall = " << (std::string)opt << sync_endl;
+        });
+
+    o["Variety"] 
+        << Option(0, 0, 40, [](const Option& opt) {
+            sync_cout << "info string Variety = " << int(opt) << sync_endl;
+        });
+
+    o["Variety Max Score"] 
+        << Option(0, 0, 50, [](const Option& opt) {
+            sync_cout << "info string Variety Max Score = " << int(opt) << sync_endl;
+        });
+
+    o["Variety Max Moves"] 
+        << Option(0, 0, 40, [](const Option& opt) {
+            sync_cout << "info string Variety Max Moves = " << int(opt) << sync_endl;
+        });
+
+    o["NNUE Dynamic Weights"]
+        << Option(true, [](const Option& opt) {
+            sync_cout << "info string NNUE Dynamic Weights is now: "
+                      << (opt ? "enabled" : "disabled") << sync_endl;
+        }); // Enable dynamic Shashin-style weights (phase/indicators blend).
+
+    o["NNUE ManualWeights"] << Option(false, [](const Option& opt) {
+        // Check if Manual Weights option is enabled or disabled.
+        if (opt) {
+            sync_cout << "info string NNUE ManualWeights enabled. Using user-defined weights." << sync_endl;
+        } else {
+            sync_cout << "info string NNUE ManualWeights disabled. Using dynamic weights." << sync_endl;
+        }
+    });
+
+    // --- NNUE strategy manual knobs --------------------------------------------
+o["NNUE StrategyMaterialWeight"]
+    << Option(0, -12, 12, [](const Option& opt) {
+        on_strategy_material_weight(opt);
+        const int v = (int)opt;
+        sync_cout << "info string NNUE StrategyMaterialWeight = " << v << sync_endl;
+    });
+
+o["NNUE StrategyPositionalWeight"]
+    << Option(0, -12, 12, [](const Option& opt) {
+        on_strategy_positional_weight(opt);
+        const int v = (int)opt;
+        sync_cout << "info string NNUE StrategyPositionalWeight = " << v << sync_endl;
+    });
+
+    // --- Search hygiene toggles -------------------------------------------------
+    o["SEE Gating Quiet"] 
+        << Option(true, [](const Option& opt) {
+            sync_cout << "info string SEE Gating Quiet is now: "
+                      << (opt ? "enabled" : "disabled") << sync_endl;
+        }); // Enable SEE gating on quiet moves.
+
+    o["SEE Gating Quiet MoveCount"] 
+        << Option(12, 0, 200, [](const Option& opt) {
+            sync_cout << "info string SEE Gating Quiet MoveCount = " << int(opt) << sync_endl;
+        }); // Apply gating only after N moves in the node.
+
+    o["SEE Threshold Quiet"] 
+        << Option(0, -1000, 1000, [](const Option& opt) {
+            sync_cout << "info string SEE Threshold Quiet = " << int(opt) << " cp" << sync_endl;
+        }); // SEE threshold (centipawns) for quiets.
+
+    o["ProbCut Calm Filter"] 
+        << Option(true, [](const Option& opt) {
+            sync_cout << "info string ProbCut Calm Filter is now: "
+                      << (opt ? "enabled" : "disabled") << sync_endl;
+        }); // Skip ProbCut if the position looks sharp.
+
+    o["ProbCut Attackers Threshold"] 
+        << Option(3, 0, 16, [](const Option& opt) {
+            sync_cout << "info string ProbCut Attackers Threshold = " << int(opt) << sync_endl;
+        }); // Max attackers on either king to still allow ProbCut.
 
     o["Use Exploration Factor"] << Option(false, [](const Option& opt) {
         sync_cout << "info string Use Exploration Factor is now: "

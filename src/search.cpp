@@ -126,31 +126,46 @@ int Reductions[MAX_MOVES];  // [depth or moveNumber]
 
 // Reduction Function with Shashin Style Adjustments
 Depth reduction(bool improving, Depth depth, int moveNumber, int delta, int rootDelta, int styleAdjustment) {
-    int reductionScale = Reductions[depth] * Reductions[moveNumber]; // Base reduction scale.
-    reductionScale += styleAdjustment; // Style-based adjustment to LMR
+    // Base reduction scale from lookup tables
+    int reductionScale = Reductions[depth] * Reductions[moveNumber];
 
-    // Dynamic adjustment based on Shashin style.
+    // Style-based adjustment to LMR
+    reductionScale += styleAdjustment;
+
+    // Avoid pathological scaling: clamp in a sane range to prevent overflow/bad values
+    reductionScale = std::clamp(reductionScale, 64, 4096);
+
+    // Dynamic adjustment based on Shashin style (Tal/Petrosian bias)
     if (styleAdjustment < 0)
         reductionScale = reductionScale * (100 + std::abs(styleAdjustment)) / 100;
     else if (styleAdjustment > 0)
         reductionScale = reductionScale * 100 / (100 + styleAdjustment);
 
-    if (Eval::CurrentStyle.attack > 10) {
-        reductionScale = reductionScale * 9 / 10; // Less aggressive reductions for Tal.
-    } else if (Eval::CurrentStyle.defense > 10) {
-        reductionScale = reductionScale * 11 / 10; // More conservative reductions for Petrosian.
-    }
-    // Capablanca: Balanced behavior, no adjustment needed.
+    // Shashin flavor: Tal → slightly less reduction, Petrosian → slightly more
+    if (Eval::CurrentStyle.attack > 10)
+        reductionScale = reductionScale * 9 / 10;    // Less aggressive reductions for Tal
+    else if (Eval::CurrentStyle.defense > 10)
+        reductionScale = reductionScale * 11 / 10;   // More conservative reductions for Petrosian
+    // Capablanca: balanced, no extra tweak
 
-    // Final reduction calculation.
-    return (reductionScale + 1346 - int(delta) * 896 / int(rootDelta)) / 1024
-         + (!improving && reductionScale > 880); // Small bonus if not improving and reduction is significant.
+    // Protect against division by zero
+    const int safeRootDelta = std::max(1, rootDelta);
+
+    // Final reduction calculation
+    int r = (reductionScale + 1346 - int(delta) * 896 / safeRootDelta) / 1024
+          + (!improving && reductionScale > 880);
+
+    // Ensure non-negative and cast to Depth
+    if (r < 0) r = 0;
+    return Depth(r);
 }
 
 // Static Calculation for Futility Move Count
 constexpr int futility_move_count(bool improving, Depth depth) {
-    return (3 + depth * depth) / (2 - improving); // Adjust move count based on depth and improving flag.
+    // Adjust move count based on depth and improving flag.
+    return (3 + depth * depth) / (2 - improving);
 }
+
 // Ensure Evaluation Stays Within Tablebase Range
 constexpr Value to_static_eval(const Value v) {
     return std::clamp(int(v), VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
@@ -162,9 +177,12 @@ int stat_bonus(Depth d) { return std::clamp(245 * d - 320, 0, 1296); }
 // History and stats update malus, based on depth
 int stat_malus(Depth d) { return (d < 4 ? 554 * d - 303 : 1203); }
 
-// Add a small random component to draw evaluations to avoid 3-fold blindness
+// Add a small jitter to draw evaluations to prevent 3-fold blindness.
+// Previous (nodes & 0x2) produced only {-1, +1} with a bit-pattern.
+// Using (nodes % 3) - 1 yields {-1, 0, +1} with better dispersion.
 Value value_draw(const Thread* thisThread) {
-    return VALUE_DRAW - 1 + Value(thisThread->nodes & 0x2);
+    const int jitter = int(static_cast<uint64_t>(thisThread->nodes) % 3) - 1;
+    return VALUE_DRAW + Value(jitter);
 }
 
 // Skill structure is used to implement strength limit. If we have a UCI_Elo,
@@ -196,53 +214,48 @@ int variety;
 template<NodeType nodeType>
 Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, bool cutNode);
 
-void update_exploration_factor(const Position& pos, int depth, int timeLeftMs) {
-    if (!(bool)Options["Use Exploration Factor"]) {
+// Update the exploration factor based on ply, time and simple tactical cues
+void update_exploration_factor(const Position& pos, int ply, int timeLeftMs) {
+    if (!(bool)Options["Use Exploration Factor"])
         return;
-    }
-    static int last_updated_ply = -1; // Stores the last ply when the factor was updated.
-    static double cached_exploration_factor = -1.0; // Temporary cache for the exploration factor.
 
-    // Update only every two plies to avoid frequent recalculations.
-    if (depth % 2 != 0 && depth != last_updated_ply) {
-        last_updated_ply = depth; // Update the ply tracker.
-    } else {
-        return; // Skip update for odd plies or redundant depths.
-    }
+    // Per-thread state to avoid cross-thread contamination.
+    static thread_local int    last_updated_ply = -1;
+    static thread_local double cached_exploration_factor = -1.0;
+
+    // Update only when ply strictly increases (monotonic along the branch)
+    if (ply <= last_updated_ply)
+        return;
+    last_updated_ply = ply;
 
     // Start with the user-configured base exploration factor.
-    double base_factor = Options["Exploration Factor"];
-    double new_exploration_factor = base_factor;
+    const double base_factor = Options["Exploration Factor"];
+    double f = base_factor;
 
     // Determine effective decay factor based on setting.
-    double decay = Options["Use Exploration Decay"] ? Search::exploration_decay_factor : 1.0;
+    const double decay = (bool)Options["Use Exploration Decay"] ? Search::exploration_decay_factor : 1.0;
 
-    // Adjust based on the remaining time.
-    if (timeLeftMs > 60000) { // Abundant time remaining.
-        new_exploration_factor += 0.05 * decay;
-    } else if (timeLeftMs < 10000) { // Limited time remaining.
-        new_exploration_factor -= 0.05 * decay;
-    }
+    // Adjust based on the remaining time (abundant vs scarce).
+    if (timeLeftMs > 60000)
+        f += 0.05 * decay;  // plenty of time → explore a bit more
+    else if (timeLeftMs < 10000)
+        f -= 0.05 * decay;  // low on time → explore a bit less
 
-    // Adjust based on search depth.
-    new_exploration_factor -= 0.005 * std::sqrt(depth) * decay;
+    // Adjust based on search progress (ply, not remaining depth).
+    // Shallower nodes get slightly more exploration; deeper nodes slightly less.
+    f -= 0.005 * std::sqrt(std::max(1, ply)) * decay;
 
-    // Adjust based on position complexity (e.g., tactical positions).
-    Square kingSq = pos.square<KING>(pos.side_to_move());
-    Bitboard attackers = pos.attackers_to(kingSq); // Get attacking pieces.
-    int attacker_count = popcount(attackers);      // Count active attackers.
+    // Light tactical cue: if our king is under notable pressure, increase exploration slightly.
+    const Square kingSq = pos.king_square(pos.side_to_move());
+    if (popcount(pos.attackers_to(kingSq)) > 2)
+        f += 0.05 * decay;
 
-    if (attacker_count > 2) { // Tactical positions with more than 2 attackers.
-        new_exploration_factor += 0.05 * decay;
-    }
-
-    // Ensure the factor stays within the valid range [0.0, 1.0].
-    new_exploration_factor = std::clamp(new_exploration_factor, 0.0, 1.0);
-
-    // Avoid unnecessary updates if the factor hasn't changed.
-    if (cached_exploration_factor != new_exploration_factor) {
-        exploration_factor = new_exploration_factor; // Update the exploration factor.
-        cached_exploration_factor = new_exploration_factor; // Cache the new factor.
+    // --- Commit exploration factor (clamped, deduplicated) ---------------------
+    // Clamp to [0.0, 1.0] and write only if it actually changed.
+    f = std::clamp(f, 0.0, 1.0);
+    if (f != cached_exploration_factor) {
+        Search::exploration_factor  = f;
+        cached_exploration_factor   = f;
     }
 }
 
@@ -637,26 +650,32 @@ void Thread::search() {
 
     multiPV = std::min(multiPV, rootMoves.size());
 
-    int searchAgainCounter = 0;
+int searchAgainCounter = 0;
 
-    // Iterative deepening loop until requested to stop or the target depth is reached
-    while (++rootDepth < MAX_PLY && !Threads.stop
-           && !(Limits.depth && mainThread && rootDepth > Limits.depth))
-    {
-        // Age out PV variability metric
-        if (mainThread)
-            totBestMoveChanges /= 2;
+// Iterative deepening loop until requested to stop or the target depth is reached
+while (++rootDepth < MAX_PLY && !Threads.stop
+       && !(Limits.depth && mainThread && rootDepth > Limits.depth)) {
 
-        // Save the last iteration's scores before the first PV line is searched and
-        // all the move scores except the (new) PV are set to -VALUE_INFINITE.
-        for (RootMove& rm : rootMoves)
-            rm.previousScore = rm.score;
+    // Update Shashin dynamic blend once per root iteration (cheap + consistent).
+    int t = 0, p = 0, c = 0;
+    Eval::NNUE::update_weights_with_blend(rootPos, t, p, c);
 
-        size_t pvFirst = 0;
-        pvLast         = 0;
+    // Age out PV variability metric
+    if (mainThread) {
+        totBestMoveChanges /= 2;
+    }
 
-        if (!Threads.increaseDepth)
-            searchAgainCounter++;
+    // Save the last iteration's scores before the first PV line is searched and
+    // all the move scores except the (new) PV are set to -VALUE_INFINITE.
+    for (RootMove& rm : rootMoves)
+        rm.previousScore = rm.score;
+
+    size_t pvFirst = 0;
+    pvLast         = 0;
+
+    if (!Threads.increaseDepth) {
+        searchAgainCounter++;
+    }
 
         // MultiPV loop. We perform a full root search for each PV line
         for (pvIdx = 0; pvIdx < multiPV && !Threads.stop; ++pvIdx)
@@ -839,7 +858,7 @@ namespace {
 // Main search function for both PV and non-PV nodes
 template<NodeType nodeType>
 Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, bool cutNode) {
-    update_exploration_factor(pos, depth, Time.availableNodes);
+    update_exploration_factor(pos, ss->ply, Time.availableNodes);
     constexpr bool PvNode   = nodeType != NonPV;
     constexpr bool rootNode = nodeType == Root;
 	
@@ -1885,6 +1904,13 @@ Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth) {
     {
         (ss + 1)->pv = pv;
         ss->pv[0]    = Move::none();
+
+        // Update dynamic Shashin blend only on meaningful PV nodes (depth gate)
+        if (depth >= 8)
+        {
+            int t = 0, p = 0, c = 0;
+            Eval::NNUE::update_weights_with_blend(pos, t, p, c);
+        }
     }
 
     Thread* thisThread = pos.this_thread();
