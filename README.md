@@ -173,19 +173,12 @@ Once the game progresses beyond this ply count, the randomization feature is dis
 
 This setting prevents randomness from affecting important endgame decisions. 
 
-  ###   NNUE StrategyMaterialWeight
+  ###   NNUE Dynamic Weights
 
-Type: Integer (Range: -12 to 12)
-Default: 0
-
-Adjusts the weight given to material balance in the evaluation function. Higher values emphasize material over other positional factors.  
-
-  ###   NNUE StrategyPositionalWeight
-
-Type: Integer (Range: -12 to 12)
-Default: 0
-
- Adjusts the weight given to positional considerations in the evaluation function. Higher values emphasize positional strategy over material.
+Type: Boolean
+Default: true
+Description: Enables the dynamic Shashin-style blending of Tal/Capablanca/Petrosian weights using game phase and positional indicators.
+Interaction: If NNUE ManualWeights is true, this dynamic system is bypassed and the manual weights are used as-is.
 
   ###   NNUE ManualWeights Adjustment
 
@@ -210,34 +203,92 @@ Adjusts the weight given to positional considerations in the evaluation function
 Type: Integer (Range: -12 to 12)
 Default: 0
 
+  ###   SEE Gating Quiet
+
+Type: Boolean
+Default: true
+Description: Enables a cheap SEE (Static Exchange Evaluation) gate for quiet moves to cut obviously bad non-captures late in the move list. Helps search hygiene by avoiding low-value branches when the node is already large.
+
+  ###   SEE Gating Quiet MoveCount
+
+Type: Integer
+Range: 0…200 Default: 12
+Description: Applies SEE gating for quiet moves only after this many legal moves have already been considered at the node.
+
+Lower values = gate earlier (more pruning)
+
+Higher values = gate later (more conservative)
+
+  ###   SEE Threshold Quiet
+
+Type: Integer (centipawns)
+Range: -1000…1000 Default: 0
+Description: Minimum SEE score a quiet move must pass to be searched (after the move-count gate).
+
+Positive values prune more (require the move to “look good” by SEE)
+
+Negative values prune less (allow more borderline quiets)
+
+  ###   ProbCut Calm Filter
+
+Type: Boolean
+Default: true
+Description: Skips ProbCut in tactically sharp positions (e.g., heavy king pressure), where shallow cutoffs are less reliable. When enabled, ProbCut is used primarily in calmer positions.
+
+  ###   ProbCut Attackers Threshold
+
+Type: Integer
+Range: 0…16 Default: 3
+Description: Maximum number of attackers on either king to still allow ProbCut.
+
+If the number of attackers exceeds this threshold, the position is considered “sharp” and ProbCut is suppressed.
+
+Lower values = stricter (skip ProbCut more often)
+
+Higher values = looser (allow ProbCut in edgier spots)
 
   ###   Exploration Parameters
 
-Option: Exploration Factor
+  ###   Use Exploration Factor
+
+Type: Boolean
+Default: false
+Description: When enabled, activates an exploration bonus during move selection (separate from Variety). Useful for testing/A-B runs or adding light stochastic exploration in practical play.
+Note: See the “Exploration Parameters” section for factor/decay tuning; this toggle simply turns the mechanism on or off.
+
+  ###   Exploration Factor
 
 Type: Floating-point (Range: 0.0 to 3.0)
 Default: 0.2
 Description: Controls the balance between exploration and exploitation during the search. A higher value increases exploration.
 
-  ###   Option: Exploration Decay Factor
+  ###   Exploration Decay Factor
 
 Type: Floating-point (Range: 0.1 to 5.0)
 Default: 1.0
 Description: Modifies how quickly the exploration factor decays over time or search depth. This parameter works in conjunction with the Exploration Factor.
 
-  * #### Option: Dynamic Exploration
+  ###   Dynamic Exploration
 
 Type: Boolean (true or false)
 Default: true
 Description: Toggles dynamic adjustments for the exploration factor. When enabled, the engine adapts exploration levels based on time constraints and position complexity.
 
-  ###   Option: Shashin Dynamic Style
+  ###  Shashin Dynamic Style
 
 Type: Boolean (true or false)
 Default: true
 Description: Enables or disables the Shashin Dynamic Style feature, which dynamically adjusts the engine's playing style (e.g., attacking, balanced, or defensive) based on the current position.
 
-  ###   Shashin Style and Custom Blends
+  ###  Use Shashin Dynamic Style
+
+Type: Boolean
+Default: true
+Description: When enabled, the engine applies the current Shashin dynamic style signal to the search (e.g., move ordering bias, LMR reductions, and selective pruning thresholds) in addition to evaluation. Turning it off keeps the search neutral, even if “Shashin Dynamic Style” is on for evaluation.
+Interaction: Works independently of NNUE ManualWeights. If manual NNUE weights are used, the search can still be influenced by Shashin style when this is true.
+Tip: For clean A/B tests of search heuristics, set this to false to remove style-driven bias from the search.
+
+  ###   Shashin Style
 
 Type: String (Options: Capablanca, Tal, Petrosian, Custom Blend)
 
@@ -248,19 +299,19 @@ Tal: Aggressive and tactical.
 Petrosian: Defensive and positional.
 Custom Blend: A mix of styles using custom-defined weights.
 
-  ###   Option: Blend Weight Tal
+  ###   Blend Weight Tal
 
 Type: Integer (Range: 0 to 100)
 Default: 70
 Description: Specifies the weight of the Tal style in a custom blend.
 
-  ###   Option: Blend Weight Capablanca
+  ###   Blend Weight Capablanca
 
 Type: Integer (Range: 0 to 100)
 Default: 0
 Description: Specifies the weight of the Capablanca style in a custom blend.
 
-  ###   Option: Blend Weight Petrosian
+  ###   OBlend Weight Petrosian
 
 Type: Integer (Range: 0 to 100)
 Default: 30
