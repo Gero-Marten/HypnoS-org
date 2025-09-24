@@ -28,12 +28,12 @@
 #include <mutex>
 #include <thread>
 #include "misc.h"
-#include "uci.h"
 #include "position.h"
 #include "thread.h"
 #include "experience.h"
+#include "uci.h"
+#include "experience_compat.h"
 
-//using namespace std;
 using namespace Hypnos;
 
 #define USE_GOOGLE_SPARSEHASH_DENSEMAP
@@ -598,11 +598,19 @@ class ExperienceData {
         if (_abortLoading.load(std::memory_order_relaxed))
             return false;
 
+        // --- usa solo il nome file nelle stampe ---
+        auto basename = [](const std::string& p) {
+            const auto pos = p.find_last_of("/\\");
+            return (pos == std::string::npos) ? p : p.substr(pos + 1);
+        };
+        const std::string fn_disp = basename(fn);
+        // ------------------------------------------
+
         if (reader->get_version() != Current::ExperienceVersion)
         {
-            sync_cout << "info string Upgrading experience file (" << fn << ") from version ("
-                      << reader->get_version() << ") to version (" << Current::ExperienceVersion
-                      << ")" << sync_endl;
+            sync_cout << "info string Upgrading experience file (" << fn_disp << ") from version ("
+                      << reader->get_version() << ") to version ("
+                      << Current::ExperienceVersion << ")" << sync_endl;
             save(fn, true, true);
         }
 
@@ -613,13 +621,13 @@ class ExperienceData {
         // Show some statistics
         if (prevPosCount)
         {
-            sync_cout << "info string " << fn << " -> Total new moves: " << expCount
+            sync_cout << "info string " << fn_disp << " -> Total new moves: " << expCount
                       << ". Total new positions: " << (_mainExp.size() - prevPosCount)
                       << ". Duplicate moves: " << duplicateMoves << sync_endl;
         }
         else
         {
-            sync_cout << "info string " << fn << " -> Total moves: " << expCount
+            sync_cout << "info string " << fn_disp << " -> Total moves: " << expCount
                       << ". Total positions: " << _mainExp.size()
                       << ". Duplicate moves: " << duplicateMoves
                       << ". Fragmentation: " << std::setprecision(2) << std::fixed
@@ -1306,7 +1314,7 @@ void convert_compact_pgn(const int argc, char* argv[]) {
 
         //Setup Position
         StateListPtr states(new std::deque<StateInfo>(1));
-        gameData.pos.set(fen, false, &states->back(), Threads.main());
+        gameData.pos.set(fen, false, &states->back());
 
         //////////////////////////////////////////////////////////////////
         //Read result
@@ -1366,7 +1374,7 @@ void convert_compact_pgn(const int argc, char* argv[]) {
             }
 
             // Parse the move
-            Move move = UCI::to_move(gameData.pos, _move);
+            Move move = UCIEngine::to_move(gameData.pos, _move);
             if (move == Move::none())
             {
                 ++globalConversionData.numGamesWithErrors;
@@ -1581,50 +1589,53 @@ void convert_compact_pgn(const int argc, char* argv[]) {
 }
 
 void show_exp(Position& pos, const bool extended) {
-    // Make sure experience has finished loading
+    // Assicura che il caricamento sia terminato
     wait_for_loading_finished();
 
     sync_cout << pos << std::endl;
 
     std::cout << "Experience: ";
-    const ExpEntryEx* expEx = Experience::probe(pos.key());
-
-    if (!expEx)
-    {
+    const ExpEntryEx* head = Experience::probe(pos.key());
+    if (!head) {
         std::cout << "No experience data found for this position" << sync_endl;
         return;
     }
 
-    const int evalImportance = (int) Options["Experience Book Eval Importance"];
+    const int evalImportance = (int)Options["Experience Book Eval Importance"];
+
+    // Colleziona e ordina per "quality"
     std::vector<std::pair<const ExpEntryEx*, int>> quality;
-    const ExpEntryEx*                              temp = expEx;
+    for (const ExpEntryEx* t = head; t; t = t->next)
+        quality.emplace_back(t, t->quality(pos, evalImportance).first);
 
-    while (temp)
-    {
-        quality.emplace_back(temp, temp->quality(pos, evalImportance).first);
-        temp = temp->next;
-    }
-
-    //Sort experience moves based on quality
-    std::stable_sort(
-      quality.begin(), quality.end(),
-      [](const std::pair<const ExpEntryEx*, int>& a, const std::pair<const ExpEntryEx*, int>& b) {
-          return a.second > b.second;
-      });
+    std::stable_sort(quality.begin(), quality.end(),
+                     [](const auto& a, const auto& b) { return a.second > b.second; });
 
     std::cout << std::endl;
     int expCount = 0;
 
-    for (const std::pair<const ExpEntryEx*, int>& pr : quality)
-    {
+    for (const auto& pr : quality) {
+        // Eval: always "cp X"; if it's mate it also adds "(mate N)"
+        const int v  = (int)pr.first->value;
+        const int cp = UCIEngine::to_cp(pr.first->value, pos);
+
+        std::string evalStr = "cp " + std::to_string(cp);
+        if (v >= VALUE_MATE - MAX_PLY || v <= -VALUE_MATE + MAX_PLY) {
+            int plies = (v >= VALUE_MATE - MAX_PLY) ? (VALUE_MATE - v) : (VALUE_MATE + v);
+            int m = (plies + 1) / 2;
+            if (v <= -VALUE_MATE + MAX_PLY) m = -m;
+            evalStr += " (mate " + std::to_string(m) + ")";
+        }
+
         std::cout << std::setw(2) << std::setfill(' ') << std::left << ++expCount << ": "
                   << std::setw(5) << std::setfill(' ') << std::left
-                  << UCI::move(pr.first->move, pos.is_chess960()) << ", depth: " << std::setw(2)
-                  << std::setfill(' ') << std::left << pr.first->depth << ", eval: " << std::setw(6)
-                  << std::setfill(' ') << std::left << UCI::value(pr.first->value);
+                  << UCIEngine::move(pr.first->move, pos.is_chess960())
+                  << ", depth: " << std::setw(2) << std::setfill(' ') << std::left
+                  << pr.first->depth
+                  << ", eval: " << std::setw(6) << std::setfill(' ') << std::left
+                  << evalStr;
 
-        if (extended)
-        {
+        if (extended) {
             std::cout << ", count: " << std::setw(6) << std::setfill(' ') << std::left
                       << pr.first->count;
 
@@ -1637,18 +1648,15 @@ void show_exp(Position& pos, const bool extended) {
         }
 
         std::cout << std::endl;
-
-        expEx = expEx->next;
     }
 
     std::cout << sync_endl;
 }
 
 void pause_learning() { learningPaused = true; }
-
 void resume_learning() { learningPaused = false; }
-
 bool is_learning_paused() { return learningPaused; }
+
 
 void add_pv_experience(const Key k, const Move m, const Value v, const Depth d) {
     if (!currentExperience)

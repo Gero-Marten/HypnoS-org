@@ -16,537 +16,83 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include "ucioption.h"
+
 #include <algorithm>
 #include <cassert>
 #include <cctype>
-#include <cstddef>
-#include <iosfwd>
-#include <istream>
-#include <map>
-#include <ostream>
+#include <cstdlib>
+#include <iostream>
 #include <sstream>
-#include <string>
+#include <utility>
 
-#include "book/book.h"
-#include "evaluate.h"
-#include "experience.h"
 #include "misc.h"
-#include "search.h"
-#include "syzygy/tbprobe.h"
-#include "thread.h"
-#include "tt.h"
-#include "types.h"
-#include "uci.h"
-#include "nnue/evaluate_nnue.h"
-
-using std::string;
 
 namespace Hypnos {
 
-UCI::OptionsMap Options;  // Global object
+bool CaseInsensitiveLess::operator()(const std::string& s1, const std::string& s2) const {
 
-namespace UCI {
-
-// Trim Function
-std::string trim(const std::string& str);
-// Remove leading and trailing spaces from a string
-std::string trim(const std::string& str) {
-    size_t first = str.find_first_not_of(' ');
-    size_t last = str.find_last_not_of(' ');
-    return (first == std::string::npos || last == std::string::npos) ? "" : str.substr(first, last - first + 1);
-}
-// 'On change' actions, triggered by an option's value change
-static void on_clear_hash(const Option&) { Search::clear(); }
-static void on_hash_size(const Option& o) { TT.resize(size_t(o)); }
-static void on_logger(const Option& o) { start_logger(o); }
-static void on_threads(const Option& o) { Threads.set(size_t(o)); }
-static void on_book(const Option& o) { Book::on_book((string) o); }
-static void on_tb_path(const Option& o) { Tablebases::init(o); }
-
-// Callback to Initialize Experience When Enabled
-static void on_exp_enabled(const Option& /*o*/) {
-    Experience::init(); // Reinitialize experience-related data.
+    return std::lexicographical_compare(
+      s1.begin(), s1.end(), s2.begin(), s2.end(),
+      [](char c1, char c2) { return std::tolower(c1) < std::tolower(c2); });
 }
 
-// Callback to Load Experience File
-static void on_exp_file(const Option& /*o*/) {
-    Experience::init(); // Reload experience file and associated data.
+void OptionsMap::add_info_listener(InfoListener&& message_func) { info = std::move(message_func); }
+
+void OptionsMap::setoption(std::istringstream& is) {
+    std::string token, name, value;
+
+    is >> token;  // Consume the "name" token
+
+    // Read the option name (can contain spaces)
+    while (is >> token && token != "value")
+        name += (name.empty() ? "" : " ") + token;
+
+    // Read the option value (can contain spaces)
+    while (is >> token)
+        value += (value.empty() ? "" : " ") + token;
+
+    if (options_map.count(name))
+        options_map[name] = value;
+    else
+        sync_cout << "No such option: " << name << sync_endl;
 }
 
-// Callback to Load Evaluation File
-static void on_eval_file(const Option&) {
-    Eval::NNUE::init(); // Reinitialize NNUE evaluation network.
+const Option& OptionsMap::operator[](const std::string& name) const {
+    auto it = options_map.find(name);
+    assert(it != options_map.end());
+    return it->second;
 }
 
-// Callback to Update Strategy Material Weight
-static void on_strategy_material_weight(const Option& o) {
-    Eval::NNUE::StrategyMaterialWeight = 10 * (int)o; // Scale and update material weight.
-}
+// Inits options and assigns idx in the correct printing order
+void OptionsMap::add(const std::string& name, const Option& option) {
+    if (!options_map.count(name))
+    {
+        static size_t insert_order = 0;
 
-// Callback to Update Strategy Positional Weight
-static void on_strategy_positional_weight(const Option& o) {
-    Eval::NNUE::StrategyPositionalWeight = 10 * (int)o; // Scale and update positional weight.
-}
+        options_map[name] = option;
 
-// Our case insensitive less() function as required by UCI protocol
-bool CaseInsensitiveLess::operator()(const string& s1, const string& s2) const {
-
-    return std::lexicographical_compare(s1.begin(), s1.end(), s2.begin(), s2.end(),
-                                        [](char c1, char c2) { return tolower(c1) < tolower(c2); });
-}
-
-
-// Initializes the UCI options to their hard-coded default values
-void init(OptionsMap& o) {
-
-    constexpr int MaxHashMB = Is64Bit ? 33554432 : 2048;
-
-    o["Debug Log File"] << Option("", on_logger);
-    o["Threads"] << Option(1, 1, 1024, on_threads);
-    o["Clean Search"] << Option(false);
-    o["Hash"] << Option(16, 1, MaxHashMB, on_hash_size);
-    o["Clear Hash"] << Option(on_clear_hash);
-    o["Ponder"] << Option(false);
-    o["MultiPV"] << Option(1, 1, 500);
-    o["Skill Level"] << Option(20, 0, 20);
-    o["MoveOverhead"] << Option(10, 0, 5000);
-    o["Minimum Thinking Time"] << Option(100, 0, 5000);
-    o["Time Contempt"] << Option(0, -100, 100);
-    o["nodestime"] << Option(0, 0, 10000);
-    o["UCI_Chess960"] << Option(false);
-    o["UCI_LimitStrength"] << Option(false);
-    o["UCI_Elo"] << Option(1320, 1320, 3190);
-    o["UCI_ShowWDL"] << Option(false);
-    o["Book File"] 
-        << Option("<empty>", [](const Option& opt) {
-            on_book(opt);
-            sync_cout << "info string Book File = " << (std::string)opt << sync_endl;
-        });
-
-    o["Book Width"] 
-        << Option(1, 1, 20, [](const Option& opt) {
-            sync_cout << "info string Book Width = " << int(opt) << sync_endl;
-        });
-
-    o["Book Depth"] 
-        << Option(255, 1, 255, [](const Option& opt) {
-            sync_cout << "info string Book Depth = " << int(opt) << sync_endl;
-        });
-
-    o["SyzygyPath"] 
-        << Option("<empty>", [](const Option& opt) {
-            on_tb_path(opt);
-            sync_cout << "info string SyzygyPath = " << (std::string)opt << sync_endl;
-        });
-
-    o["SyzygyProbeDepth"] 
-        << Option(1, 1, 100, [](const Option& opt) {
-            sync_cout << "info string SyzygyProbeDepth = " << int(opt) << sync_endl;
-        });
-
-    o["Syzygy50MoveRule"] 
-        << Option(true, [](const Option& opt) {
-            sync_cout << "info string Syzygy50MoveRule is now: "
-                      << (opt ? "enabled" : "disabled") << sync_endl;
-        });
-
-    o["SyzygyProbeLimit"] 
-        << Option(7, 0, 7, [](const Option& opt) {
-            sync_cout << "info string SyzygyProbeLimit = " << int(opt) << " men" << sync_endl;
-        });
-
-    o["Experience Enabled"] 
-        << Option(false, [](const Option& opt) {
-            on_exp_enabled(opt);
-            sync_cout << "info string Experience Enabled is now: "
-                      << (opt ? "enabled" : "disabled") << sync_endl;
-        });
-
-    o["Experience File"] 
-        << Option("Hypnos.exp", [](const Option& opt) {
-            on_exp_file(opt);
-            sync_cout << "info string Experience File = " << (std::string)opt << sync_endl;
-        });
-
-    o["Experience Readonly"] 
-        << Option(false, [](const Option& opt) {
-            sync_cout << "info string Experience Readonly is now: "
-                      << (opt ? "enabled" : "disabled") << sync_endl;
-        });
-
-    o["Experience Book"] 
-        << Option(false, [](const Option& opt) {
-            sync_cout << "info string Experience Book is now: "
-                      << (opt ? "enabled" : "disabled") << sync_endl;
-        });
-
-    o["Experience Book Width"] 
-        << Option(1, 1, 20, [](const Option& opt) {
-            sync_cout << "info string Experience Book Width = " << int(opt) << sync_endl;
-        });
-
-    o["Experience Book Eval Importance"] 
-        << Option(5, 0, 10, [](const Option& opt) {
-            sync_cout << "info string Experience Book Eval Importance = " << int(opt) << sync_endl;
-        });
-
-    o["Experience Book Min Depth"] 
-        << Option(27, Experience::MinDepth, 64, [](const Option& opt) {
-            sync_cout << "info string Experience Book Min Depth = " << int(opt) << sync_endl;
-        });
-
-    o["Experience Book Max Moves"] 
-        << Option(16, 1, 100, [](const Option& opt) {
-            sync_cout << "info string Experience Book Max Moves = " << int(opt) << sync_endl;
-        });
-
-    o["EvalFile"] 
-        << Option(EvalFileDefaultNameBig, [](const Option& opt) {
-            on_eval_file(opt);
-            sync_cout << "info string EvalFile = " << (std::string)opt << sync_endl;
-        });
-
-    o["EvalFileSmall"] 
-        << Option(EvalFileDefaultNameSmall, [](const Option& opt) {
-            on_eval_file(opt);
-            sync_cout << "info string EvalFileSmall = " << (std::string)opt << sync_endl;
-        });
-
-    o["Variety"] 
-        << Option(0, 0, 40, [](const Option& opt) {
-            sync_cout << "info string Variety = " << int(opt) << sync_endl;
-        });
-
-    o["Variety Max Score"] 
-        << Option(0, 0, 50, [](const Option& opt) {
-            sync_cout << "info string Variety Max Score = " << int(opt) << sync_endl;
-        });
-
-    o["Variety Max Moves"] 
-        << Option(0, 0, 40, [](const Option& opt) {
-            sync_cout << "info string Variety Max Moves = " << int(opt) << sync_endl;
-        });
-
-    o["NNUE Dynamic Weights"]
-        << Option(true, [](const Option& opt) {
-            sync_cout << "info string NNUE Dynamic Weights is now: "
-                      << (opt ? "enabled" : "disabled") << sync_endl;
-        }); // Enable dynamic Shashin-style weights (phase/indicators blend).
-
-    o["NNUE ManualWeights"] << Option(false, [](const Option& opt) {
-        // Check if Manual Weights option is enabled or disabled.
-        if (opt) {
-            sync_cout << "info string NNUE ManualWeights enabled. Using user-defined weights." << sync_endl;
-        } else {
-            sync_cout << "info string NNUE ManualWeights disabled. Using dynamic weights." << sync_endl;
-        }
-    });
-
-    // --- NNUE strategy manual knobs --------------------------------------------
-o["NNUE StrategyMaterialWeight"]
-    << Option(0, -12, 12, [](const Option& opt) {
-        on_strategy_material_weight(opt);
-        const int v = (int)opt;
-        sync_cout << "info string NNUE StrategyMaterialWeight = " << v << sync_endl;
-    });
-
-o["NNUE StrategyPositionalWeight"]
-    << Option(0, -12, 12, [](const Option& opt) {
-        on_strategy_positional_weight(opt);
-        const int v = (int)opt;
-        sync_cout << "info string NNUE StrategyPositionalWeight = " << v << sync_endl;
-    });
-
-    // --- Search hygiene toggles -------------------------------------------------
-    o["SEE Gating Quiet"] 
-        << Option(true, [](const Option& opt) {
-            sync_cout << "info string SEE Gating Quiet is now: "
-                      << (opt ? "enabled" : "disabled") << sync_endl;
-        }); // Enable SEE gating on quiet moves.
-
-    o["SEE Gating Quiet MoveCount"] 
-        << Option(12, 0, 200, [](const Option& opt) {
-            sync_cout << "info string SEE Gating Quiet MoveCount = " << int(opt) << sync_endl;
-        }); // Apply gating only after N moves in the node.
-
-    o["SEE Threshold Quiet"] 
-        << Option(0, -1000, 1000, [](const Option& opt) {
-            sync_cout << "info string SEE Threshold Quiet = " << int(opt) << " cp" << sync_endl;
-        }); // SEE threshold (centipawns) for quiets.
-
-    o["ProbCut Calm Filter"] 
-        << Option(true, [](const Option& opt) {
-            sync_cout << "info string ProbCut Calm Filter is now: "
-                      << (opt ? "enabled" : "disabled") << sync_endl;
-        }); // Skip ProbCut if the position looks sharp.
-
-    o["ProbCut Attackers Threshold"] 
-        << Option(3, 0, 16, [](const Option& opt) {
-            sync_cout << "info string ProbCut Attackers Threshold = " << int(opt) << sync_endl;
-        }); // Max attackers on either king to still allow ProbCut.
-
-    o["Use Exploration Factor"] << Option(false, [](const Option& opt) {
-        sync_cout << "info string Use Exploration Factor is now: "
-                  << (opt ? "enabled" : "disabled") << sync_endl;
-    });
-
-    // Exploration Factor (now uses 0-30 and is divided by 10 in code)
-    o["Exploration Factor"] << Option(0, 0, 30, [](const Option& v) { 
-        Search::exploration_factor = float(int(v)) / 10.0;
-});
-
-	// Exploration Decay Factor (now uses 1-50 and is divided by 10 in code)
-    o["Use Exploration Decay"] << Option(false);
-    o["Exploration Decay Factor"] << Option(0, 0, 50, [](const Option& v) { 
-        Search::exploration_decay_factor = float(int(v)) / 10.0;
-});
-
-    o["Dynamic Exploration"] << Option(false, [](const Option& opt) { // Toggle for dynamic exploration.
-        sync_cout << "info string Dynamic Exploration is now: " 
-                  << (opt ? "enabled" : "disabled") << sync_endl;
-});
-
-    o["Shashin Dynamic Style"] << Option(true, [](const Option& opt) {
-        sync_cout << "info string Shashin Dynamic Style is now: " 
-                  << (opt ? "enabled" : "disabled") << sync_endl;
-});
-
-    o["Use Shashin Style"] << Option(false, [](const Option& opt) {
-        if (!(bool)opt) {
-            Eval::CurrentStyle = {0, 0, 0, 0, 0, 0}; // Neutral style
-            sync_cout << "info string Shashin Style disabled: using HypnoS-like evaluation" << sync_endl;
-        } else {
-            // Re-apply selected style from current combo
-            std::string style = Options["Shashin Style"];
-            Eval::set_shashin_style(style);
-            sync_cout << "info string Shashin Style enabled: " << style << sync_endl;
-        }
-    });
-
-    o["Shashin Style"] << Option(
-        "Capablanca var Tal var Capablanca var Petrosian", 
-        "Capablanca", // Default value.
-        [](const Option& opt) {
-           std::string selectedStyle = static_cast<std::string>(opt);
-        // Management of predefined styles
-           Eval::set_shashin_style(selectedStyle);
-        sync_cout << "info string Shashin Style is now: " << selectedStyle << sync_endl;
+        options_map[name].parent = this;
+        options_map[name].idx    = insert_order++;
     }
-);
-
-    o["Enable Custom Blend"] << Option(false, [](const Option& opt) {
-        bool isEnabled = static_cast<bool>(opt);
-        int talWeight = Options["Blend Weight Tal"];
-        int capablancaWeight = Options["Blend Weight Capablanca"];
-        int petrosianWeight = Options["Blend Weight Petrosian"];
-
-    // Calculate the total weight
-    int total = talWeight + capablancaWeight + petrosianWeight;
-    bool adjusted = false;
-
-    if (total > 100) {
-        // Excess weight to redistribute
-        int excess = total - 100;
-        adjusted = true;
-
-        // Count the active weights (non-zero)
-        int activeWeights = (talWeight > 0) + (capablancaWeight > 0) + (petrosianWeight > 0);
-
-        // Proportional distribution of the excess only on active weights
-        if (activeWeights > 0) {
-            if (talWeight > 0) {
-                talWeight -= std::ceil((float)excess / activeWeights);
-                talWeight = std::max(0, talWeight); // Avoid negative values
-            }
-            if (capablancaWeight > 0) {
-                capablancaWeight -= std::ceil((float)excess / activeWeights);
-                capablancaWeight = std::max(0, capablancaWeight);
-            }
-            if (petrosianWeight > 0) {
-                petrosianWeight -= std::ceil((float)excess / activeWeights);
-                petrosianWeight = std::max(0, petrosianWeight);
-            }
-        }
+    else
+    {
+        std::cerr << "Option \"" << name << "\" was already added!" << std::endl;
+        std::exit(EXIT_FAILURE);
     }
-
-    // Detailed debug to check updated weights
-    sync_cout << "Debug: Final Weights After Adjustment - Tal(" << talWeight
-              << "), Capablanca(" << capablancaWeight
-              << "), Petrosian(" << petrosianWeight << ")" << sync_endl;
-
-    // Apply static weights for the Custom Blend
-    if (isEnabled) {
-        Eval::set_shashin_custom_blend(talWeight, petrosianWeight, capablancaWeight);
-        sync_cout << "info string Custom Blend Active: Updated Static Weights Applied" << sync_endl;
-    } else if (Options["Shashin Dynamic Style"]) {
-        Eval::apply_dynamic_shashin_weights(talWeight, petrosianWeight, capablancaWeight, *globalPos);
-        sync_cout << "info string Dynamic Weights Applied" << sync_endl;
-    } else {
-        Eval::set_shashin_custom_blend(talWeight, petrosianWeight, capablancaWeight);
-        sync_cout << "info string Static Weights Applied" << sync_endl;
-    }
-
-    if (adjusted) {
-        sync_cout << "info string Warning: Weights exceeded 100. Values have been adjusted automatically." << sync_endl;
-    }
-});
-
-// Logic for Tal
-    o["Blend Weight Tal"] << Option(70, 0, 100, [](const Option& opt) {
-        int talWeight = static_cast<int>(opt);
-        int capablancaWeight = Options["Blend Weight Capablanca"];
-        int petrosianWeight = Options["Blend Weight Petrosian"];
-
-        bool adjusted = false;
-        int total = talWeight + capablancaWeight + petrosianWeight;
-
-        if (total > 100) {
-        int excess = total - 100;
-        adjusted = true;
-
-        int activeWeights = (talWeight > 0) + (capablancaWeight > 0) + (petrosianWeight > 0);
-
-        if (activeWeights > 0) {
-            if (capablancaWeight > 0) {
-                capablancaWeight -= std::ceil((float)excess / activeWeights);
-                capablancaWeight = std::max(0, capablancaWeight);
-            }
-            if (petrosianWeight > 0) {
-                petrosianWeight -= std::ceil((float)excess / activeWeights);
-                petrosianWeight = std::max(0, petrosianWeight);
-            }
-        }
-    }
-
-    if (Options["Enable Custom Blend"]) {
-        Eval::set_shashin_custom_blend(talWeight, petrosianWeight, capablancaWeight);
-        sync_cout << "info string Custom Blend Active: Updated Static Weights Applied" << sync_endl;
-    }
-
-    sync_cout << "info string Updated Blend Weights: Tal(" << talWeight
-              << "), Capablanca(" << capablancaWeight
-              << "), Petrosian(" << petrosianWeight << ")" << sync_endl;
-
-    if (adjusted) {
-        sync_cout << "info string Warning: Weights exceeded 100. Values have been adjusted automatically." << sync_endl;
-    }
-});
-
-    // Logic for Capablanca
-    o["Blend Weight Capablanca"] << Option(0, 0, 100, [](const Option& opt) {
-        int capablancaWeight = static_cast<int>(opt);
-        int talWeight = Options["Blend Weight Tal"];
-        int petrosianWeight = Options["Blend Weight Petrosian"];
-
-        bool adjusted = false;
-        int total = talWeight + capablancaWeight + petrosianWeight;
-
-        if (total > 100) {
-        int excess = total - 100;
-        adjusted = true;
-
-        int activeWeights = (talWeight > 0) + (capablancaWeight > 0) + (petrosianWeight > 0);
-
-        if (activeWeights > 0) {
-            if (talWeight > 0) {
-                talWeight -= std::ceil((float)excess / activeWeights);
-                talWeight = std::max(0, talWeight);
-            }
-            if (petrosianWeight > 0) {
-                petrosianWeight -= std::ceil((float)excess / activeWeights);
-                petrosianWeight = std::max(0, petrosianWeight);
-            }
-        }
-    }
-
-    if (Options["Enable Custom Blend"]) {
-        Eval::set_shashin_custom_blend(talWeight, petrosianWeight, capablancaWeight);
-        sync_cout << "info string Custom Blend Active: Updated Static Weights Applied" << sync_endl;
-    }
-
-    sync_cout << "info string Updated Blend Weights: Tal(" << talWeight
-              << "), Capablanca(" << capablancaWeight
-              << "), Petrosian(" << petrosianWeight << ")" << sync_endl;
-
-    if (adjusted) {
-        sync_cout << "info string Warning: Weights exceeded 100. Values have been adjusted automatically." << sync_endl;
-    }
-});
-
-    // Logic for Petrosian
-    o["Blend Weight Petrosian"] << Option(30, 0, 100, [](const Option& opt) {
-        int petrosianWeight = static_cast<int>(opt);
-        int talWeight = Options["Blend Weight Tal"];
-        int capablancaWeight = Options["Blend Weight Capablanca"];
-
-        bool adjusted = false;
-        int total = talWeight + capablancaWeight + petrosianWeight;
-
-        if (total > 100) {
-        int excess = total - 100;
-        adjusted = true;
-
-        int activeWeights = (talWeight > 0) + (capablancaWeight > 0) + (petrosianWeight > 0);
-
-        if (activeWeights > 0) {
-            if (talWeight > 0) {
-                talWeight -= std::ceil((float)excess / activeWeights);
-                talWeight = std::max(0, talWeight);
-            }
-            if (capablancaWeight > 0) {
-                capablancaWeight -= std::ceil((float)excess / activeWeights);
-                capablancaWeight = std::max(0, capablancaWeight);
-            }
-        }
-    }
-
-    if (Options["Enable Custom Blend"]) {
-        Eval::set_shashin_custom_blend(talWeight, petrosianWeight, capablancaWeight);
-        sync_cout << "info string Custom Blend Active: Updated Static Weights Applied" << sync_endl;
-    }
-
-    sync_cout << "info string Updated Blend Weights: Tal(" << talWeight
-              << "), Capablanca(" << capablancaWeight
-              << "), Petrosian(" << petrosianWeight << ")" << sync_endl;
-
-    if (adjusted) {
-        sync_cout << "info string Warning: Weights exceeded 100. Values have been adjusted automatically." << sync_endl;
-    }
-});
-}
-
-// Used to print all the options default values in chronological
-// insertion order (the idx field) and in the format defined by the UCI protocol.
-std::ostream& operator<<(std::ostream& os, const OptionsMap& om) {
-
-    for (size_t idx = 0; idx < om.size(); ++idx)
-        for (const auto& it : om)
-            if (it.second.idx == idx)
-            {
-                const Option& o = it.second;
-                os << "\noption name " << it.first << " type " << o.type;
-
-                if (o.type == "string" || o.type == "check" || o.type == "combo")
-                    os << " default " << o.defaultValue;
-
-                if (o.type == "spin")
-                    os << " default " << int(stof(o.defaultValue)) << " min " << o.min << " max "
-                       << o.max;
-
-                break;
-            }
-
-    return os;
 }
 
 
-// Option class constructors and conversion operators
+std::size_t OptionsMap::count(const std::string& name) const { return options_map.count(name); }
+
+Option::Option(const OptionsMap* map) :
+    parent(map) {}
 
 Option::Option(const char* v, OnChange f) :
     type("string"),
     min(0),
     max(0),
-    on_change(f) {
+    on_change(std::move(f)) {
     defaultValue = currentValue = v;
 }
 
@@ -554,7 +100,7 @@ Option::Option(bool v, OnChange f) :
     type("check"),
     min(0),
     max(0),
-    on_change(f) {
+    on_change(std::move(f)) {
     defaultValue = currentValue = (v ? "true" : "false");
 }
 
@@ -562,13 +108,13 @@ Option::Option(OnChange f) :
     type("button"),
     min(0),
     max(0),
-    on_change(f) {}
+    on_change(std::move(f)) {}
 
-Option::Option(double v, int minv, int maxv, OnChange f) :
+Option::Option(int v, int minv, int maxv, OnChange f) :
     type("spin"),
     min(minv),
     max(maxv),
-    on_change(f) {
+    on_change(std::move(f)) {
     defaultValue = currentValue = std::to_string(v);
 }
 
@@ -576,7 +122,7 @@ Option::Option(const char* v, const char* cur, OnChange f) :
     type("combo"),
     min(0),
     max(0),
-    on_change(f) {
+    on_change(std::move(f)) {
     defaultValue = v;
     currentValue = cur;
 }
@@ -596,50 +142,72 @@ bool Option::operator==(const char* s) const {
     return !CaseInsensitiveLess()(currentValue, s) && !CaseInsensitiveLess()(s, currentValue);
 }
 
-
-// Inits options and assigns idx in the correct printing order
-
-void Option::operator<<(const Option& o) {
-
-    static size_t insert_order = 0;
-
-    *this = o;
-    idx   = insert_order++;
-}
+bool Option::operator!=(const char* s) const { return !(*this == s); }
 
 
 // Updates currentValue and triggers on_change() action. It's up to
 // the GUI to check for option's limits, but we could receive the new value
 // from the user by console window, so let's check the bounds anyway.
-Option& Option::operator=(const string& v) {
+Option& Option::operator=(const std::string& v) {
 
     assert(!type.empty());
 
     if ((type != "button" && type != "string" && v.empty())
         || (type == "check" && v != "true" && v != "false")
-        || (type == "spin" && (stof(v) < min || stof(v) > max)))
+        || (type == "spin" && (std::stoi(v) < min || std::stoi(v) > max)))
         return *this;
 
     if (type == "combo")
     {
         OptionsMap         comboMap;  // To have case insensitive compare
-        string             token;
+        std::string        token;
         std::istringstream ss(defaultValue);
         while (ss >> token)
-            comboMap[token] << Option();
+            comboMap.add(token, Option());
         if (!comboMap.count(v) || v == "var")
             return *this;
     }
 
-    if (type != "button")
+    if (type == "string")
+        currentValue = v == "<empty>" ? "" : v;
+    else if (type != "button")
         currentValue = v;
 
     if (on_change)
-        on_change(*this);
+    {
+        const auto ret = on_change(*this);
+
+        if (ret && parent != nullptr && parent->info != nullptr)
+            parent->info(ret);
+    }
 
     return *this;
 }
 
-}  // namespace UCI
+std::ostream& operator<<(std::ostream& os, const OptionsMap& om) {
+    for (size_t idx = 0; idx < om.options_map.size(); ++idx)
+        for (const auto& it : om.options_map)
+            if (it.second.idx == idx)
+            {
+                const Option& o = it.second;
+                os << "\noption name " << it.first << " type " << o.type;
 
-}  // namespace Hypnos
+                if (o.type == "check" || o.type == "combo")
+                    os << " default " << o.defaultValue;
+
+                else if (o.type == "string")
+                {
+                    std::string defaultValue = o.defaultValue.empty() ? "<empty>" : o.defaultValue;
+                    os << " default " << defaultValue;
+                }
+
+                else if (o.type == "spin")
+                    os << " default " << stoi(o.defaultValue) << " min " << o.min << " max "
+                       << o.max;
+
+                break;
+            }
+
+    return os;
+}
+}

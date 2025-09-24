@@ -19,49 +19,63 @@
 #ifndef MISC_H_INCLUDED
 #define MISC_H_INCLUDED
 
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <iosfwd>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
-#include <iostream>
-#ifndef _WIN32
-    #include <fcntl.h>
-    #include <unistd.h>
-    #include <sys/mman.h>
-    #include <sys/stat.h>
-#else
-    #define WIN32_LEAN_AND_MEAN
-    #ifndef NOMINMAX
-        #define NOMINMAX  // Disable macros min() and max()
-    #endif
-    #include <windows.h>
-#endif
-
-#include "types.h"
+#include "types.h"   // <<< AGGIUNTO: definisce Hypnos::Value
 
 #define stringify2(x) #x
 #define stringify(x) stringify2(x)
 
 namespace Hypnos {
 
+std::string engine_version_info();
 std::string engine_info(bool to_uci = false);
 std::string compiler_info();
-void        prefetch(void* addr);
-void        start_logger(const std::string& fname);
-void*       std_aligned_alloc(size_t alignment, size_t size);
-void        std_aligned_free(void* ptr);
-void*       aligned_large_pages_alloc(
-        size_t size);                      // memory aligned by page size, min alignment: 4096 bytes
-void aligned_large_pages_free(void* mem);  // nop if mem == nullptr
+
+// Preloads the given address in L1/L2 cache. This is a non-blocking
+// function that doesn't stall the CPU waiting for data to be loaded from memory,
+// which can be quite slow.
+void prefetch(const void* addr);
+
+void start_logger(const std::string& fname);
+
+size_t str_to_size_t(const std::string& s);
+
+#if defined(__linux__)
+
+struct PipeDeleter {
+    void operator()(FILE* file) const {
+        if (file != nullptr)
+        {
+            pclose(file);
+        }
+    }
+};
+
+#endif
+
+// Reads the file as bytes.
+// Returns std::nullopt if the file does not exist.
+std::optional<std::string> read_file_to_string(const std::string& path);
 
 void dbg_hit_on(bool cond, int slot = 0);
 void dbg_mean_of(int64_t value, int slot = 0);
 void dbg_stdev_of(int64_t value, int slot = 0);
+void dbg_extremes_of(int64_t value, int slot = 0);
 void dbg_correl_of(int64_t value1, int64_t value2, int slot = 0);
 void dbg_print();
+void dbg_clear();
 
 using TimePoint = std::chrono::milliseconds::rep;  // A value in milliseconds
 static_assert(sizeof(TimePoint) == sizeof(int64_t), "TimePoint should be 64 bits");
@@ -71,6 +85,30 @@ inline TimePoint now() {
       .count();
 }
 
+inline std::vector<std::string_view> split(std::string_view s, std::string_view delimiter) {
+    std::vector<std::string_view> res;
+
+    if (s.empty())
+        return res;
+
+    size_t begin = 0;
+    for (;;)
+    {
+        const size_t end = s.find(delimiter, begin);
+        if (end == std::string::npos)
+            break;
+
+        res.emplace_back(s.substr(begin, end - begin));
+        begin = end + delimiter.size();
+    }
+
+    res.emplace_back(s.substr(begin));
+
+    return res;
+}
+
+void remove_whitespace(std::string& s);
+bool is_whitespace(std::string_view s);
 
 enum SyncCout {
     IO_LOCK,
@@ -81,26 +119,12 @@ std::ostream& operator<<(std::ostream&, SyncCout);
 #define sync_cout std::cout << IO_LOCK
 #define sync_endl std::endl << IO_UNLOCK
 
+void sync_cout_start();
+void sync_cout_end();
 
-// align_ptr_up() : get the first aligned element of an array.
-// ptr must point to an array of size at least `sizeof(T) * N + alignment` bytes,
-// where N is the number of elements in the array.
-template<uintptr_t Alignment, typename T>
-T* align_ptr_up(T* ptr) {
-    static_assert(alignof(T) < Alignment);
-
-    const uintptr_t ptrint = reinterpret_cast<uintptr_t>(reinterpret_cast<char*>(ptr));
-    return reinterpret_cast<T*>(
-      reinterpret_cast<char*>((ptrint + (Alignment - 1)) / Alignment * Alignment));
-}
-
-
-// IsLittleEndian : true if and only if the binary is compiled on a little endian machine
-static inline const union {
-    uint32_t i;
-    char     c[4];
-} Le                                    = {0x01020304};
-static inline const bool IsLittleEndian = (Le.c[0] == 4);
+// True if and only if the binary is compiled on a little-endian machine
+static inline const std::uint16_t Le             = 1;
+static inline const bool          IsLittleEndian = *reinterpret_cast<const char*>(&Le) == 1;
 
 
 template<typename T, std::size_t MaxSize>
@@ -119,20 +143,111 @@ class ValueList {
 };
 
 
-/// xorshift64star Pseudo-Random Number Generator
-/// This class is based on original code written and dedicated
-/// to the public domain by Sebastiano Vigna (2014).
-/// It has the following characteristics:
-///
-///  -  Outputs 64-bit numbers
-///  -  Passes Dieharder and SmallCrush test batteries
-///  -  Does not require warm-up, no zeroland to escape
-///  -  Internal state is a single 64-bit integer
-///  -  Period is 2^64 - 1
-///  -  Speed: 1.60 ns/call (Core i7 @3.40GHz)
-///
-/// For further analysis see
-///   <http://vigna.di.unimi.it/ftp/papers/xorshift.pdf>
+template<typename T, std::size_t Size, std::size_t... Sizes>
+class MultiArray;
+
+namespace Detail {
+
+template<typename T, std::size_t Size, std::size_t... Sizes>
+struct MultiArrayHelper {
+    using ChildType = MultiArray<T, Sizes...>;
+};
+
+template<typename T, std::size_t Size>
+struct MultiArrayHelper<T, Size> {
+    using ChildType = T;
+};
+
+template<typename To, typename From>
+constexpr bool is_strictly_assignable_v =
+  std::is_assignable_v<To&, From> && (std::is_same_v<To, From> || !std::is_convertible_v<From, To>);
+
+}
+
+// MultiArray is a generic N-dimensional array.
+// The template parameters (Size and Sizes) encode the dimensions of the array.
+template<typename T, std::size_t Size, std::size_t... Sizes>
+class MultiArray {
+    using ChildType = typename Detail::MultiArrayHelper<T, Size, Sizes...>::ChildType;
+    using ArrayType = std::array<ChildType, Size>;
+    ArrayType data_;
+
+   public:
+    using value_type             = typename ArrayType::value_type;
+    using size_type              = typename ArrayType::size_type;
+    using difference_type        = typename ArrayType::difference_type;
+    using reference              = typename ArrayType::reference;
+    using const_reference        = typename ArrayType::const_reference;
+    using pointer                = typename ArrayType::pointer;
+    using const_pointer          = typename ArrayType::const_pointer;
+    using iterator               = typename ArrayType::iterator;
+    using const_iterator         = typename ArrayType::const_iterator;
+    using reverse_iterator       = typename ArrayType::reverse_iterator;
+    using const_reverse_iterator = typename ArrayType::const_reverse_iterator;
+
+    constexpr auto&       at(size_type index) noexcept { return data_.at(index); }
+    constexpr const auto& at(size_type index) const noexcept { return data_.at(index); }
+
+    constexpr auto&       operator[](size_type index) noexcept { return data_[index]; }
+    constexpr const auto& operator[](size_type index) const noexcept { return data_[index]; }
+
+    constexpr auto&       front() noexcept { return data_.front(); }
+    constexpr const auto& front() const noexcept { return data_.front(); }
+    constexpr auto&       back() noexcept { return data_.back(); }
+    constexpr const auto& back() const noexcept { return data_.back(); }
+
+    auto*       data() { return data_.data(); }
+    const auto* data() const { return data_.data(); }
+
+    constexpr auto begin() noexcept { return data_.begin(); }
+    constexpr auto end() noexcept { return data_.end(); }
+    constexpr auto begin() const noexcept { return data_.begin(); }
+    constexpr auto end() const noexcept { return data_.end(); }
+    constexpr auto cbegin() const noexcept { return data_.cbegin(); }
+    constexpr auto cend() const noexcept { return data_.cend(); }
+
+    constexpr auto rbegin() noexcept { return data_.rbegin(); }
+    constexpr auto rend() noexcept { return data_.rend(); }
+    constexpr auto rbegin() const noexcept { return data_.rbegin(); }
+    constexpr auto rend() const noexcept { return data_.rend(); }
+    constexpr auto crbegin() const noexcept { return data_.crbegin(); }
+    constexpr auto crend() const noexcept { return data_.crend(); }
+
+    constexpr bool      empty() const noexcept { return data_.empty(); }
+    constexpr size_type size() const noexcept { return data_.size(); }
+    constexpr size_type max_size() const noexcept { return data_.max_size(); }
+
+    template<typename U>
+    void fill(const U& v) {
+        static_assert(Detail::is_strictly_assignable_v<T, U>,
+                      "Cannot assign fill value to entry type");
+        for (auto& ele : data_)
+        {
+            if constexpr (sizeof...(Sizes) == 0)
+                ele = v;
+            else
+                ele.fill(v);
+        }
+    }
+
+    constexpr void swap(MultiArray<T, Size, Sizes...>& other) noexcept { data_.swap(other.data_); }
+};
+
+
+// xorshift64star Pseudo-Random Number Generator
+// This class is based on original code written and dedicated
+// to the public domain by Sebastiano Vigna (2014).
+// It has the following characteristics:
+//
+//  -  Outputs 64-bit numbers
+//  -  Passes Dieharder and SmallCrush test batteries
+//  -  Does not require warm-up, no zeroland to escape
+//  -  Internal state is a single 64-bit integer
+//  -  Period is 2^64 - 1
+//  -  Speed: 1.60 ns/call (Core i7 @3.40GHz)
+//
+// For further analysis see
+//   <http://vigna.di.unimi.it/ftp/papers/xorshift.pdf>
 
 class PRNG {
 
@@ -155,8 +270,8 @@ class PRNG {
         return T(rand64());
     }
 
-    /// Special generator used to fast init magic numbers.
-    /// Output values only have 1/8th of their bits set on average.
+    // Special generator used to fast init magic numbers.
+    // Output values only have 1/8th of their bits set on average.
     template<typename T>
     T sparse_rand() {
         return T(rand64() & rand64() & rand64());
@@ -177,229 +292,56 @@ inline uint64_t mul_hi64(uint64_t a, uint64_t b) {
 #endif
 }
 
-/// Under Windows it is not possible for a process to run on more than one
-/// logical processor group. This usually means to be limited to use max 64
-/// cores. To overcome this, some special platform specific API should be
-/// called to set group affinity for each thread. Original code from Texel by
-/// Peter Österlund.
 
-namespace WinProcGroup {
-  void bind_this_thread(size_t idx);
-}
+struct CommandLine {
+   public:
+    CommandLine(int _argc, char** _argv) :
+        argc(_argc),
+        argv(_argv) {}
 
-namespace CommandLine {
-void init(int argc, char* argv[]);
+    static std::string get_binary_directory(std::string argv0);
+    static std::string get_working_directory();
 
-extern std::string binaryDirectory;   // path of the executable directory
-extern std::string workingDirectory;  // path of the working directory
-}
+    int    argc;
+    char** argv;
+};
 
-void        show_logo();
-std::string format_bytes(uint64_t bytes, int decimals);
+// Forward declaration required for is_game_decided
+class Position;
 
-namespace SysInfo {
-void              init();
-const std::string os_info();
-const std::string processor_brand();
-const std::string numa_nodes();
-const std::string physical_cores();
-const std::string logical_cores();
-const std::string is_hyper_threading();
-const std::string cache_info(int idx);
-const std::string total_memory();
-}
-
-class Position;  //Needed by is_game_decided
-
-#define EMPTY "<empty>"
 namespace Utility {
-#if defined(_WIN32) || defined(_WIN64)
-constexpr char DirectorySeparator        = '\\';
-constexpr char ReverseDirectorySeparator = '/';
-#else
-constexpr char DirectorySeparator        = '/';
-constexpr char ReverseDirectorySeparator = '\\';
-#endif
 
-extern std::string myFolder;
+template<typename T, typename Predicate>
+void move_to_front(std::vector<T>& vec, Predicate pred) {
+    auto it = std::find_if(vec.begin(), vec.end(), pred);
 
-void init(const char* arg0);
+    if (it != vec.end())
+    {
+        std::rotate(vec.begin(), it, it + 1);
+    }
+}
 
-bool file_exists(const std::string& filename);
+// HypnoS: declaration of the decided-game heuristic
 bool is_game_decided(const Position& pos, Value lastScore);
 
-std::string unquote(const std::string& s);
-bool        is_empty_filename(const std::string& f);
-std::string fix_path(const std::string& p);
-std::string combine_path(const std::string& p1, const std::string& p2);
-std::string map_path(const std::string& p);
+} // namespace Utility
 
-size_t get_file_size(const std::string& f);
-bool   is_same_file(const std::string& f1, const std::string& f2);
-
-std::string format_bytes(uint64_t bytes, int decimals);
-
-std::string format_string(const char* const fmt, ...);
-
-class FileMapping {
-   private:
-    uint64_t mapping;
-    void*    baseAddress;
-    size_t   dataSize;
-
-   public:
-    FileMapping() :
-        mapping(0),
-        baseAddress(nullptr),
-        dataSize(0) {}
-
-    ~FileMapping() { unmap(); }
-
-    bool map(const std::string& f, bool verbose) {
-        unmap();
-
-#ifdef _WIN32
-        // Note FILE_FLAG_RANDOM_ACCESS is only a hint to Windows and as such may get ignored.
-        HANDLE fd = CreateFile(f.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                               FILE_FLAG_RANDOM_ACCESS, nullptr);
-
-        if (fd == INVALID_HANDLE_VALUE)
-        {
-            if (verbose)
-                sync_cout << "info string CreateFile() failed for: " << f
-                          << ". Error code: " << GetLastError() << sync_endl;
-
-            return false;
-        }
-
-        //Read file size
-        DWORD sizeHigh;
-        DWORD sizeLow = GetFileSize(fd, &sizeHigh);
-        if (sizeHigh == 0 && sizeLow == 0)
-        {
-            CloseHandle(fd);
-
-            if (verbose)
-                sync_cout << "info string File is empty: " << f << sync_endl;
-
-            return false;
-        }
-
-        //Create mapping
-        HANDLE mmap = CreateFileMapping(fd, nullptr, PAGE_READONLY, sizeHigh, sizeLow, nullptr);
-        CloseHandle(fd);
-
-        if (!mmap)
-        {
-            if (verbose)
-                sync_cout << "info string CreateFileMapping() failed for: " << f
-                          << ". Error code: " << GetLastError() << sync_endl;
-
-            return false;
-        }
-
-        //Get data pointer
-        void* viewBase = MapViewOfFile(mmap, FILE_MAP_READ, 0, 0, 0);
-        if (!viewBase)
-        {
-            if (verbose)
-                sync_cout << "info string MapViewOfFile() failed for: " << f
-                          << ". Error code: " << GetLastError() << sync_endl;
-
-            return false;
-        }
-
-        //Assign
-        mapping     = (uint64_t) mmap;
-        baseAddress = viewBase;
-        dataSize    = ((size_t) sizeHigh << 32) | (size_t) sizeLow;
-#else
-        //Open the file
-        struct stat statbuf;
-        int         fd = ::open(f.c_str(), O_RDONLY);
-
-        if (fd == -1)
-        {
-            if (verbose)
-                sync_cout << "info string open() failed for: " << f << sync_endl;
-
-            return false;
-        }
-
-        //Read file size
-        fstat(fd, &statbuf);
-        if (statbuf.st_size == 0)
-        {
-            ::close(fd);
-
-            if (verbose)
-                sync_cout << "info string File is empty: " << f << sync_endl;
-
-            return false;
-        }
-
-        //Create mapping
-        void* data = mmap(nullptr, statbuf.st_size, PROT_READ, MAP_SHARED, fd, 0);
-        if (data == MAP_FAILED)
-        {
-            ::close(fd);
-
-            if (verbose)
-                sync_cout << "info string mmap() failed for: " << f << sync_endl;
-
-            return false;
-        }
-
-    #if defined(MADV_RANDOM)
-        madvise(data, statbuf.st_size, MADV_RANDOM);
+#if defined(__GNUC__) && !defined(__clang__)
+    #if __GNUC__ >= 13
+        #define sf_assume(cond) __attribute__((assume(cond)))
+    #else
+        #define sf_assume(cond) \
+            do \
+            { \
+                if (!(cond)) \
+                    __builtin_unreachable(); \
+            } while (0)
     #endif
-        ::close(fd);
-
-        mapping     = statbuf.st_size;
-        baseAddress = data;
-        dataSize    = statbuf.st_size;
-#endif
-        return true;
-    }
-
-    void unmap() {
-        assert((mapping == 0) == (baseAddress == nullptr)
-               && (baseAddress == nullptr) == (dataSize == 0));
-
-#ifdef _WIN32
-        if (baseAddress)
-            UnmapViewOfFile(baseAddress);
-
-        if (mapping)
-            CloseHandle((HANDLE) mapping);
 #else
-        if (baseAddress && mapping)
-            munmap(baseAddress, mapping);
+    // do nothing for other compilers
+    #define sf_assume(cond)
 #endif
-        baseAddress = nullptr;
-        mapping     = 0;
-        dataSize    = 0;
-    }
 
-    bool has_data() const {
-        assert((mapping == 0) == (baseAddress == nullptr)
-               && (baseAddress == nullptr) == (dataSize == 0));
+}  // namespace Hypnos
 
-        return (baseAddress != nullptr && dataSize != 0);
-    }
-
-    const unsigned char* data() const {
-        assert(mapping != 0 && baseAddress != nullptr && dataSize != 0);
-        return (const unsigned char*) baseAddress;
-    }
-
-    size_t data_size() const {
-        assert(mapping != 0 && baseAddress != nullptr && dataSize != 0);
-        return dataSize;
-    }
-};
-}
-
-} // namespace Hypnos
-
-#endif // #ifndef MISC_H_INCLUDED
+#endif  // #ifndef MISC_H_INCLUDED

@@ -37,11 +37,6 @@ namespace Hypnos::Eval::NNUE {
 // Input features used in evaluation function
 using FeatureSet = Features::HalfKAv2_hm;
 
-enum NetSize : int {
-    Big,
-    Small
-};
-
 // Number of input feature dimensions after conversion
 constexpr IndexType TransformedFeatureDimensionsBig = 3072;
 constexpr int       L2Big                           = 15;
@@ -54,8 +49,14 @@ constexpr int       L3Small                           = 32;
 constexpr IndexType PSQTBuckets = 8;
 constexpr IndexType LayerStacks = 8;
 
+// If vector instructions are enabled, we update and refresh the
+// accumulator tile by tile such that each tile fits in the CPU's
+// vector registers.
+static_assert(PSQTBuckets % 8 == 0,
+              "Per feature PSQT values cannot be processed at granularity lower than 8 at a time.");
+
 template<IndexType L1, int L2, int L3>
-struct Network {
+struct NetworkArchitecture {
     static constexpr IndexType TransformedFeatureDimensions = L1;
     static constexpr int       FC_0_OUTPUTS                 = L2;
     static constexpr int       FC_1_OUTPUTS                 = L3;

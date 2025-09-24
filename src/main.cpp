@@ -16,57 +16,50 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <cstddef>
 #include <iostream>
+#include <ctime>
 
 #include "bitboard.h"
-#include "evaluate.h"
 #include "misc.h"
 #include "position.h"
-#include "search.h"
-#include "thread.h"
-#include "tune.h"
 #include "types.h"
 #include "uci.h"
-#include "experience.h"
-#include "book/book.h"
+#include "tune.h"
+
+void showLogo();
+
+void showLogo() {
+    constexpr const char* CYAN  = "\033[31m";
+    constexpr const char* RESET = "\033[0m";
+
+    std::cout << CYAN << R"(
+
+|_|   _  _  _  __
+| |\/|_)| |(_)_\
+   / |   
+
+)" << RESET << std::endl;
+}
 
 using namespace Hypnos;
 
 int main(int argc, char* argv[]) {
 
-    Utility::init(argv[0]);
-    SysInfo::init();
-    show_logo();
+    showLogo();
 
     std::cout << engine_info() << std::endl;
+    std::cout << compiler_info();
 
-    CommandLine::init(argc, argv);
+    std::cout << "\nBuild date/time       : "
+              << __DATE__ << " " << __TIME__ << std::endl;
 
-    std::cout << "Operating System (OS) : " << SysInfo::os_info() << std::endl
-              << "CPU Brand             : " << SysInfo::processor_brand() << std::endl
-              << "NUMA Nodes            : " << SysInfo::numa_nodes() << std::endl
-              << "Cores                 : " << SysInfo::physical_cores() << std::endl
-              << "Threads               : " << SysInfo::logical_cores() << std::endl
-              << "Hyper-Threading       : " << SysInfo::is_hyper_threading() << std::endl
-              << "L1/L2/L3 cache size   : " << SysInfo::cache_info(0) << "/"
-              << SysInfo::cache_info(1) << "/" << SysInfo::cache_info(2) << std::endl
-              << "Memory installed (RAM): " << SysInfo::total_memory() << std::endl
-              << std::endl;
-
-    UCI::init(Options);
-    Tune::init();
     Bitboards::init();
     Position::init();
-    Experience::init();
-    Threads.set(size_t(Options["Threads"]));
-    Search::clear();  // After threads are up
-    Eval::NNUE::init();
-    Book::init();
+    UCIEngine uci(argc, argv);
 
-    UCI::loop(argc, argv);
+    Tune::init(uci.engine_options());
 
-    Experience::unload();
-    Threads.set(0);
+    uci.loop();
+
     return 0;
 }

@@ -37,7 +37,9 @@
 //               | only in 64-bit mode and requires hardware with pext support.
 
     #include <cassert>
+    #include <cstddef>
     #include <cstdint>
+    #include <type_traits>
 
     #if defined(_MSC_VER)
         // Disable some silly and noisy warnings from MSVC compiler
@@ -55,9 +57,15 @@
 // _WIN32                  Building on Windows (any)
 // _WIN64                  Building on Windows 64 bit
 
-    #if defined(__GNUC__) && (__GNUC__ < 9 || (__GNUC__ == 9 && __GNUC_MINOR__ <= 2)) \
-      && defined(_WIN32) && !defined(__clang__)
-        #define ALIGNAS_ON_STACK_VARIABLES_BROKEN
+// Enforce minimum GCC version
+    #if defined(__GNUC__) && !defined(__clang__) \
+      && (__GNUC__ < 9 || (__GNUC__ == 9 && __GNUC_MINOR__ < 3))
+        #error "Hypnos requires GCC 9.3 or later for correct compilation"
+    #endif
+
+    // Enforce minimum Clang version
+    #if defined(__clang__) && (__clang_major__ < 10)
+        #error "Hypnos requires Clang 10.0 or later for correct compilation"
     #endif
 
     #define ASSERT_ALIGNED(ptr, alignment) assert(reinterpret_cast<uintptr_t>(ptr) % alignment == 0)
@@ -108,13 +116,13 @@ using Bitboard = uint64_t;
 constexpr int MAX_MOVES = 256;
 constexpr int MAX_PLY   = 246;
 
-enum Color {
+enum Color : int8_t {
     WHITE,
     BLACK,
     COLOR_NB = 2
 };
 
-enum CastlingRights {
+enum CastlingRights : int8_t {
     NO_CASTLING,
     WHITE_OO,
     WHITE_OOO = WHITE_OO << 1,
@@ -130,16 +138,16 @@ enum CastlingRights {
     CASTLING_RIGHT_NB = 16
 };
 
-enum Bound {
+enum Bound : int8_t {
     BOUND_NONE,
     BOUND_UPPER,
     BOUND_LOWER,
     BOUND_EXACT = BOUND_UPPER | BOUND_LOWER
 };
 
-// Value is used as an alias for int16_t, this is done to differentiate between
-// a search value and any other integer value. The values used in search are always
-// supposed to be in the range (-VALUE_NONE, VALUE_NONE] and should not exceed this range.
+// Value is used as an alias for int, this is done to differentiate between a search
+// value and any other integer value. The values used in search are always supposed
+// to be in the range (-VALUE_NONE, VALUE_NONE] and should not exceed this range.
 using Value = int;
 
 constexpr Value VALUE_ZERO     = 0;
@@ -155,6 +163,21 @@ constexpr Value VALUE_TB                 = VALUE_MATE_IN_MAX_PLY - 1;
 constexpr Value VALUE_TB_WIN_IN_MAX_PLY  = VALUE_TB - MAX_PLY;
 constexpr Value VALUE_TB_LOSS_IN_MAX_PLY = -VALUE_TB_WIN_IN_MAX_PLY;
 
+
+constexpr bool is_valid(Value value) { return value != VALUE_NONE; }
+
+constexpr bool is_win(Value value) {
+    assert(is_valid(value));
+    return value >= VALUE_TB_WIN_IN_MAX_PLY;
+}
+
+constexpr bool is_loss(Value value) {
+    assert(is_valid(value));
+    return value <= VALUE_TB_LOSS_IN_MAX_PLY;
+}
+
+constexpr bool is_decisive(Value value) { return is_win(value) || is_loss(value); }
+
 // In the code, we make the assumption that these values
 // are such that non_pawn_material() can be used to uniquely
 // identify the material on the board.
@@ -164,34 +187,21 @@ constexpr Value BishopValue = 825;
 constexpr Value RookValue   = 1276;
 constexpr Value QueenValue  = 2538;
 
-enum PieceType {
-    NO_PIECE_TYPE,
-    PAWN,
-    KNIGHT,
-    BISHOP,
-    ROOK,
-    QUEEN,
-    KING,
-    ALL_PIECES    = 0,
+
+// clang-format off
+enum PieceType : std::int8_t {
+    NO_PIECE_TYPE, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING,
+    ALL_PIECES = 0,
     PIECE_TYPE_NB = 8
 };
 
-enum Piece {
+enum Piece : std::int8_t {
     NO_PIECE,
-    W_PAWN = PAWN,
-    W_KNIGHT,
-    W_BISHOP,
-    W_ROOK,
-    W_QUEEN,
-    W_KING,
-    B_PAWN = PAWN + 8,
-    B_KNIGHT,
-    B_BISHOP,
-    B_ROOK,
-    B_QUEEN,
-    B_KING,
+    W_PAWN = PAWN,     W_KNIGHT, W_BISHOP, W_ROOK, W_QUEEN, W_KING,
+    B_PAWN = PAWN + 8, B_KNIGHT, B_BISHOP, B_ROOK, B_QUEEN, B_KING,
     PIECE_NB = 16
 };
+// clang-format on
 
 constexpr Value PieceValue[PIECE_NB] = {
   VALUE_ZERO, PawnValue, KnightValue, BishopValue, RookValue, QueenValue, VALUE_ZERO, VALUE_ZERO,
@@ -199,87 +209,24 @@ constexpr Value PieceValue[PIECE_NB] = {
 
 using Depth = int;
 
-enum : int {
-    DEPTH_QS_CHECKS    = 0,
-    DEPTH_QS_NO_CHECKS = -1,
+// The following DEPTH_ constants are used for transposition table entries
+// and quiescence search move generation stages. In regular search, the
+// depth stored in the transposition table is literal: the search depth
+// (effort) used to make the corresponding transposition table value. In
+// quiescence search, however, the transposition table entries only store
+// the current quiescence move generation stage (which should thus compare
+// lower than any regular search depth).
+constexpr Depth DEPTH_QS = 0;
+// For transposition table entries where no searching at all was done
+// (whether regular or qsearch) we use DEPTH_UNSEARCHED, which should thus
+// compare lower than any quiescence or regular depth. DEPTH_ENTRY_OFFSET
+// is used only for the transposition table entry occupancy check (see tt.cpp),
+// and should thus be lower than DEPTH_UNSEARCHED.
+constexpr Depth DEPTH_UNSEARCHED   = -2;
+constexpr Depth DEPTH_ENTRY_OFFSET = -3;
 
-    DEPTH_NONE = -6,
-
-    DEPTH_OFFSET = -7  // value used only for TT entry occupancy check
-};
-
-enum Square : int {
-    SQ_A1,
-    SQ_B1,
-    SQ_C1,
-    SQ_D1,
-    SQ_E1,
-    SQ_F1,
-    SQ_G1,
-    SQ_H1,
-    SQ_A2,
-    SQ_B2,
-    SQ_C2,
-    SQ_D2,
-    SQ_E2,
-    SQ_F2,
-    SQ_G2,
-    SQ_H2,
-    SQ_A3,
-    SQ_B3,
-    SQ_C3,
-    SQ_D3,
-    SQ_E3,
-    SQ_F3,
-    SQ_G3,
-    SQ_H3,
-    SQ_A4,
-    SQ_B4,
-    SQ_C4,
-    SQ_D4,
-    SQ_E4,
-    SQ_F4,
-    SQ_G4,
-    SQ_H4,
-    SQ_A5,
-    SQ_B5,
-    SQ_C5,
-    SQ_D5,
-    SQ_E5,
-    SQ_F5,
-    SQ_G5,
-    SQ_H5,
-    SQ_A6,
-    SQ_B6,
-    SQ_C6,
-    SQ_D6,
-    SQ_E6,
-    SQ_F6,
-    SQ_G6,
-    SQ_H6,
-    SQ_A7,
-    SQ_B7,
-    SQ_C7,
-    SQ_D7,
-    SQ_E7,
-    SQ_F7,
-    SQ_G7,
-    SQ_H7,
-    SQ_A8,
-    SQ_B8,
-    SQ_C8,
-    SQ_D8,
-    SQ_E8,
-    SQ_F8,
-    SQ_G8,
-    SQ_H8,
-    SQ_NONE,
-
-    SQUARE_ZERO = 0,
-    SQUARE_NB   = 64
-};
-
-constexpr Square ALL_SQUARES[] = {
+// clang-format off
+enum Square : int8_t {
     SQ_A1, SQ_B1, SQ_C1, SQ_D1, SQ_E1, SQ_F1, SQ_G1, SQ_H1,
     SQ_A2, SQ_B2, SQ_C2, SQ_D2, SQ_E2, SQ_F2, SQ_G2, SQ_H2,
     SQ_A3, SQ_B3, SQ_C3, SQ_D3, SQ_E3, SQ_F3, SQ_G3, SQ_H3,
@@ -287,10 +234,15 @@ constexpr Square ALL_SQUARES[] = {
     SQ_A5, SQ_B5, SQ_C5, SQ_D5, SQ_E5, SQ_F5, SQ_G5, SQ_H5,
     SQ_A6, SQ_B6, SQ_C6, SQ_D6, SQ_E6, SQ_F6, SQ_G6, SQ_H6,
     SQ_A7, SQ_B7, SQ_C7, SQ_D7, SQ_E7, SQ_F7, SQ_G7, SQ_H7,
-    SQ_A8, SQ_B8, SQ_C8, SQ_D8, SQ_E8, SQ_F8, SQ_G8, SQ_H8
-};
+    SQ_A8, SQ_B8, SQ_C8, SQ_D8, SQ_E8, SQ_F8, SQ_G8, SQ_H8,
+    SQ_NONE,
 
-enum Direction : int {
+    SQUARE_ZERO = 0,
+    SQUARE_NB   = 64
+};
+// clang-format on
+
+enum Direction : int8_t {
     NORTH = 8,
     EAST  = 1,
     SOUTH = -NORTH,
@@ -302,7 +254,7 @@ enum Direction : int {
     NORTH_WEST = NORTH + WEST
 };
 
-enum File : int {
+enum File : int8_t {
     FILE_A,
     FILE_B,
     FILE_C,
@@ -314,7 +266,7 @@ enum File : int {
     FILE_NB
 };
 
-enum Rank : int {
+enum Rank : int8_t {
     RANK_1,
     RANK_2,
     RANK_3,
@@ -328,23 +280,19 @@ enum Rank : int {
 
 // Keep track of what a move changes on the board (used by NNUE)
 struct DirtyPiece {
+    Piece  pc;        // this is never allowed to be NO_PIECE
+    Square from, to;  // to should be SQ_NONE for promotions
 
-    // Number of changed pieces
-    int dirty_num;
-
-    // Max 3 pieces can change in one move. A promotion with capture moves
-    // both the pawn and the captured piece to SQ_NONE and the piece promoted
-    // to from SQ_NONE to the capture square.
-    Piece piece[3];
-
-    // From and to squares, which may be SQ_NONE
-    Square from[3];
-    Square to[3];
+    // if {add,remove}_sq is SQ_NONE, {add,remove}_pc is allowed to be
+    // uninitialized
+    // castling uses add_sq and remove_sq to remove and add the rook
+    Square remove_sq, add_sq;
+    Piece  remove_pc, add_pc;
 };
 
     #define ENABLE_INCR_OPERATORS_ON(T) \
-        inline T& operator++(T& d) { return d = T(int(d) + 1); } \
-        inline T& operator--(T& d) { return d = T(int(d) - 1); }
+        constexpr T& operator++(T& d) { return d = T(int(d) + 1); } \
+        constexpr T& operator--(T& d) { return d = T(int(d) - 1); }
 
 ENABLE_INCR_OPERATORS_ON(PieceType)
 ENABLE_INCR_OPERATORS_ON(Square)
@@ -357,26 +305,22 @@ constexpr Direction operator+(Direction d1, Direction d2) { return Direction(int
 constexpr Direction operator*(int i, Direction d) { return Direction(i * int(d)); }
 
 // Additional operators to add a Direction to a Square
-constexpr Square operator+(Square s, Direction d) { return Square(int(s) + int(d)); }
-constexpr Square operator-(Square s, Direction d) { return Square(int(s) - int(d)); }
-inline Square&   operator+=(Square& s, Direction d) { return s = s + d; }
-inline Square&   operator-=(Square& s, Direction d) { return s = s - d; }
+constexpr Square  operator+(Square s, Direction d) { return Square(int(s) + int(d)); }
+constexpr Square  operator-(Square s, Direction d) { return Square(int(s) - int(d)); }
+constexpr Square& operator+=(Square& s, Direction d) { return s = s + d; }
+constexpr Square& operator-=(Square& s, Direction d) { return s = s - d; }
 
-constexpr Color operator~(Color c) {
-    return Color(c ^ BLACK);  // Toggle color
-}
+// Toggle color
+constexpr Color operator~(Color c) { return Color(c ^ BLACK); }
 
-constexpr Square flip_rank(Square s) {  // Swap A1 <-> A8
-    return Square(s ^ SQ_A8);
-}
+// Swap A1 <-> A8
+constexpr Square flip_rank(Square s) { return Square(s ^ SQ_A8); }
 
-constexpr Square flip_file(Square s) {  // Swap A1 <-> H1
-    return Square(s ^ SQ_H1);
-}
+// Swap A1 <-> H1
+constexpr Square flip_file(Square s) { return Square(s ^ SQ_H1); }
 
-constexpr Piece operator~(Piece pc) {
-    return Piece(pc ^ 8);  // Swap color of piece B_KNIGHT <-> W_KNIGHT
-}
+// Swap color of piece B_KNIGHT <-> W_KNIGHT
+constexpr Piece operator~(Piece pc) { return Piece(pc ^ 8); }
 
 constexpr CastlingRights operator&(Color c, CastlingRights cr) {
     return CastlingRights((c == WHITE ? WHITE_CASTLING : BLACK_CASTLING) & cr);
@@ -392,7 +336,7 @@ constexpr Piece make_piece(Color c, PieceType pt) { return Piece((c << 3) + pt);
 
 constexpr PieceType type_of(Piece pc) { return PieceType(pc & 7); }
 
-inline Color color_of(Piece pc) {
+constexpr Color color_of(Piece pc) {
     assert(pc != NO_PIECE);
     return Color(pc >> 3);
 }
@@ -411,10 +355,12 @@ constexpr Rank relative_rank(Color c, Square s) { return relative_rank(c, rank_o
 
 constexpr Direction pawn_push(Color c) { return c == WHITE ? NORTH : SOUTH; }
 
+
 // Based on a congruential pseudo-random number generator
 constexpr Key make_key(uint64_t seed) {
     return seed * 6364136223846793005ULL + 1442695040888963407ULL;
 }
+
 
 enum MoveType {
     NORMAL,
@@ -431,9 +377,10 @@ enum MoveType {
 // bit 14-15: special move flag: promotion (1), en passant (2), castling (3)
 // NOTE: en passant bit is set only when a pawn can be captured
 //
-// Special cases are Move::none() and Move::null(). We can sneak these in because in
-// any normal move destination square is always different from origin square
-// while Move::none() and Move::null() have the same origin and destination square.
+// Special cases are Move::none() and Move::null(). We can sneak these in because
+// in any normal move the destination square and origin square are always different,
+// but Move::none() and Move::null() have the same origin and destination square.
+
 class Move {
    public:
     Move() = default;
@@ -477,12 +424,20 @@ class Move {
     constexpr std::uint16_t raw() const { return data; }
 
     struct MoveHash {
-        std::size_t operator()(const Move& m) const { return m.data; }
+        std::size_t operator()(const Move& m) const { return make_key(m.data); }
     };
 
    protected:
     std::uint16_t data;
 };
+
+template<typename T, typename... Ts>
+struct is_all_same {
+    static constexpr bool value = (std::is_same_v<T, Ts> && ...);
+};
+
+template<typename... Ts>
+constexpr auto is_all_same_v = is_all_same<Ts...>::value;
 
 }  // namespace Hypnos
 

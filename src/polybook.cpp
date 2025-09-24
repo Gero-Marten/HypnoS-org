@@ -1,34 +1,46 @@
+/*
+  HypnoS, a UCI chess playing engine derived from Stockfish
+  Copyright (C) 2004-2025 The Stockfish developers (see AUTHORS file)
+
+  HypnoS is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  HypnoS is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#include "polybook.h"
+#include "uci.h"
+#include "movegen.h"
+#include "thread.h"
 #include <iostream>
-#include <sstream>
-#include <iomanip>
-#include <random>
-#include <map>
-#include "../../movegen.h"
-#include "../../uci.h"
-#include "polyglot.h"
+#include "misc.h"
+#include <sys/timeb.h>
+#include <cmath>
 
 using namespace std;
-using namespace Hypnos;
+
+namespace Hypnos {
+
+PolyBook polybook[2];
+PRNG     rng(time(NULL));
 
 namespace {
-// A Polyglot book is a series of "entries" of 16 bytes. All integers are
-// stored in big-endian format, with the highest byte first (regardless of
-// size). The entries are ordered according to the key in ascending order.
-struct PolyglotEntry {
-    uint64_t key;
-    uint16_t move;
-    uint16_t count;
-    int32_t  learn;
-};
-
-// Random numbers from Polyglot, used to compute book hash keys
+// Random numbers from PolyGlot, used to compute book hash keys
 const union {
-    Key PolyglotRandoms[781];
+    uint64_t PolyGlotRandoms[781];
     struct {
-        Key psq[12][64];   // [piece][square]
-        Key castling[4];   // [castling flag]
-        Key enpassant[8];  // [file]
-        Key turn;
+        uint64_t psq[12][64];   // [piece][square]
+        uint64_t castle[4];     // [castle right]
+        uint64_t enpassant[8];  // [file]
+        uint64_t turn;
     } Zobrist;
 } PG = {{0x9D39247E33776D41ULL, 0x2AF7398005AAA5C7ULL, 0x44DB015024623547ULL, 0x9C15F73E62A76AE2ULL,
          0x75834465489C0C89ULL, 0x3290AC3A203001BFULL, 0x0FBBAD1F61042279ULL, 0xE83A908FF2FB60CAULL,
@@ -226,29 +238,223 @@ const union {
          0x70CC73D90BC26E24ULL, 0xE21A6B35DF0C3AD7ULL, 0x003A93D8B2806962ULL, 0x1C99DED33CB890A1ULL,
          0xCF3145DE0ADD4289ULL, 0xD0E4427A5514FB72ULL, 0x77C621CC9FB3A483ULL, 0x67A34DAC4356550BULL,
          0xF8D626AAAF278509ULL}};
+}
 
-// Polyglot_key() returns the Polyglot hash key of the given position
-Key Polyglot_key(const Position& pos) {
+namespace {
+bool is_little_endian() {
+    int num = 1;
+    return (*(uint8_t*) &num == 1);
+}
+
+uint16_t swap_uint16(uint16_t d) {
+    uint16_t a;
+    uint8_t* dst = (uint8_t*) &a;
+    uint8_t* src = (uint8_t*) &d;
+
+    dst[0] = src[1];
+    dst[1] = src[0];
+
+    return a;
+}
+
+uint32_t swap_uint32(uint32_t d) {
+    uint32_t a;
+    uint8_t* dst = (uint8_t*) &a;
+    uint8_t* src = (uint8_t*) &d;
+
+    dst[0] = src[3];
+    dst[1] = src[2];
+    dst[2] = src[1];
+    dst[3] = src[0];
+
+    return a;
+}
+
+uint64_t swap_uint64(uint64_t d) {
+    uint64_t a;
+    uint8_t* dst = (uint8_t*) &a;
+    uint8_t* src = (uint8_t*) &d;
+
+    dst[0] = src[7];
+    dst[1] = src[6];
+    dst[2] = src[5];
+    dst[3] = src[4];
+    dst[4] = src[3];
+    dst[5] = src[2];
+    dst[6] = src[1];
+    dst[7] = src[0];
+
+    return a;
+}
+
+void byteswap_polyhash(PolyHash* ph) {
+    if (is_little_endian())
+    {
+        ph->key    = swap_uint64(ph->key);
+        ph->move   = swap_uint16(ph->move);
+        ph->weight = swap_uint16(ph->weight);
+        ph->learn  = swap_uint32(ph->learn);
+    }
+}
+}
+
+PolyBook::PolyBook() {
+    keycount = 0;
+    polyhash = NULL;
+    enabled  = false;
+
+    index_first = index_best = index_rand = 0;
+    index_count = index_weight_count = 0;
+}
+
+PolyBook::~PolyBook() {
+    if (polyhash != NULL)
+        delete[] polyhash;
+}
+
+void PolyBook::init(const OptionsMap& options) {
+    polybook[0].init(options["Book1 File"]);
+    polybook[1].init(options["Book2 File"]);
+}
+
+void PolyBook::init(const std::string& bookfile) {
+    enabled = false;
+    if (bookfile.empty())
+        return;
+
+    FILE* fpt = fopen(bookfile.c_str(), "rb");
+    if (fpt == NULL)
+    {
+        sync_cout << "info string Could not open " << bookfile << sync_endl;
+        return;
+    }
+
+    if (polyhash)
+    {
+        free(polyhash);
+        polyhash = NULL;
+    }
+
+    fseek(fpt, 0L, SEEK_END);
+    size_t filesize = (size_t) ftell(fpt);
+    fseek(fpt, 0L, SEEK_SET);
+
+    keycount = filesize / 16;
+    polyhash = (PolyHash*) malloc(filesize);
+    if (!polyhash)
+    {
+        sync_cout << "info string Memory allocation failed" << bookfile << sync_endl;
+        return;
+    }
+
+    size_t readSize = fread(polyhash, 1, filesize, fpt);
+    fclose(fpt);
+
+    if (readSize != filesize)
+    {
+        free(polyhash);
+        polyhash = NULL;
+
+        sync_cout << "info string Could not read " << bookfile << sync_endl;
+        return;
+    }
+
+    for (int i = 0; i < keycount; i++)
+        byteswap_polyhash(&polyhash[i]);
+
+    sync_cout << "info string Book loaded: " << bookfile << sync_endl;
+
+    enabled = true;
+}
+
+Move PolyBook::probe(Position& pos, bool bestBookMove, int width) {
+    if (!enabled)
+        return Move::none();
+
+    Key key = polyglot_key(pos);
+    int n   = find_first_key(key);
+    if (n < 1)
+        return Move::none();
+
+    Move m;
+
+    if (bestBookMove || n == 1)
+    {
+        int idx = index_best;
+        m = pg_move_to_sf_move(pos, polyhash[idx].move);
+    }
+    else
+    {
+        // Smooth mapping: from width=1 (free/random) to width=10 (selective/strict)
+        double exponent = 1.0 + (std::clamp(width, 1, 10) - 1) * 0.5;
+
+        std::vector<double> scores(n);
+        double total = 0.0;
+
+        for (int i = 0; i < n; ++i)
+        {
+            int w = polyhash[index_first + i].weight;
+            double s = std::pow(static_cast<double>(w), exponent);
+            scores[i] = s;
+            total += s;
+        }
+
+        double r = (double)(rng.rand<uint32_t>() % 1000000) / 1000000.0 * total;
+        double sum = 0.0;
+        int idx = index_first;
+
+        for (int i = 0; i < n; ++i)
+        {
+            sum += scores[i];
+            if (sum >= r)
+            {
+                idx = index_first + i;
+                break;
+            }
+        }
+
+        m = pg_move_to_sf_move(pos, polyhash[idx].move);
+    }
+
+    if (n == 1 || !check_draw(pos, m))
+        return m;
+
+    if (n > 1)
+    {
+        int idx = index_first;
+        if (m == pg_move_to_sf_move(pos, polyhash[index_first].move))
+            idx = index_first + 1;
+
+        m = pg_move_to_sf_move(pos, polyhash[idx].move);
+        if (!check_draw(pos, m))
+            return m;
+    }
+
+    return Move::none();
+}
+
+
+Key PolyBook::polyglot_key(const Position& pos) {
     Key      key = 0;
     Bitboard b   = pos.pieces();
 
     while (b)
     {
-        Square s  = pop_lsb(b);
-        Piece  pc = pos.piece_on(s);
+        Square s = pop_lsb(b);
+        Piece  p = pos.piece_on(s);
 
-        // Polyglot pieces are: BP = 0, WP = 1, BN = 2, ... BK = 10, WK = 11
-        key ^= PG.Zobrist.psq[2 * (type_of(pc) - 1) + (color_of(pc) == WHITE)][s];
+        // PolyGlot pieces are: BP = 0, WP = 1, BN = 2, ... BK = 10, WK = 11
+        key ^= PG.Zobrist.psq[2 * (type_of(p) - 1) + (color_of(p) == WHITE)][s];
     }
 
     if (pos.can_castle(WHITE_OO))
-        key ^= PG.Zobrist.castling[0];
+        key ^= PG.Zobrist.castle[0];
     if (pos.can_castle(WHITE_OOO))
-        key ^= PG.Zobrist.castling[1];
+        key ^= PG.Zobrist.castle[1];
     if (pos.can_castle(BLACK_OO))
-        key ^= PG.Zobrist.castling[2];
+        key ^= PG.Zobrist.castle[2];
     if (pos.can_castle(BLACK_OOO))
-        key ^= PG.Zobrist.castling[3];
+        key ^= PG.Zobrist.castle[3];
 
     if (pos.ep_square() != SQ_NONE)
         key ^= PG.Zobrist.enpassant[file_of(pos.ep_square())];
@@ -259,277 +465,131 @@ Key Polyglot_key(const Position& pos) {
     return key;
 }
 
-Move make_move(const PolyglotEntry& e) {
-    // A Polyglot book move is encoded as follows:
-    //
-    // bit  0- 5: destination square (from 0 to 63)
-    // bit  6-11: origin square (from 0 to 63)
-    // bit 12-14: promotion piece (from KNIGHT == 1 to QUEEN == 4)
-    //
-    // Castling moves follow the "king captures rook" representation. If a book
-    // move is a promotion, we have to convert it to our representation and in
-    // all other cases, we can directly compare with a Move after having masked
-    // out the special Move flags (bit 14-15) that are not supported by Polyglot.
-    Move move = Move(e.move);
-    int  pt   = (move.raw() >> 12) & 7;
+// A PolyGlot book move is encoded as follows:
+//
+// bit  0- 5: destination square (from 0 to 63)
+// bit  6-11: origin square (from 0 to 63)
+// bit 12-14: promotion piece (from KNIGHT == 1 to QUEEN == 4)
+//
+// Castling moves follow "king captures rook" representation. So in case book
+// move is a promotion we have to convert to our representation, in all the
+// other cases we can directly compare with a Move after having masked out
+// the special Move's flags (bit 14-15) that are not supported by PolyGlot.
+//
+// SF:
+// bit  0- 5: destination square (from 0 to 63)
+// bit  6-11: origin square (from 0 to 63)
+// bit 12-13: promotion piece type - 2 (from KNIGHT-2 to QUEEN-2)
+// bit 14-15: special move flag: promotion (1), en passant (2), castling (3)
+Move PolyBook::pg_move_to_sf_move(const Position& pos, unsigned short pg_move) {
+    Move move = Move(pg_move);
+
+    int pt = (move.raw() >> 12) & 7;
     if (pt)
         move = Move::make<PROMOTION>(move.from_sq(), move.to_sq(), PieceType(pt + 1));
 
-    return move;
-}
-
-void read_poly_entry(PolyglotEntry& e, size_t& pos, unsigned char* buffer, size_t bufferLen) {
-    assert(buffer && bufferLen);
-    assert(pos + sizeof(PolyglotEntry) <= bufferLen);
-
-    e.key   = Book::BookUtil::read_big_endian<uint64_t>(buffer, pos, bufferLen);
-    e.move  = Book::BookUtil::read_big_endian<uint16_t>(buffer, pos, bufferLen);
-    e.count = Book::BookUtil::read_big_endian<uint16_t>(buffer, pos, bufferLen);
-    e.learn = Book::BookUtil::read_big_endian<int32_t>(buffer, pos, bufferLen);
-}
-
-struct PolyglotBookMove {
-    Move          move;
-    PolyglotEntry entry;
-
-    PolyglotBookMove() {
-        move = Move::none();
-        memset(&entry, 0, sizeof(PolyglotEntry));
-    }
-    PolyglotBookMove(const PolyglotEntry& e, Move m) {
-        memcpy(&entry, &e, sizeof(PolyglotEntry));
-        move = m;
-    }
-};
-
-auto randomEngine = default_random_engine(now());
-}  // namespace
-
-namespace Hypnos::Book::Polyglot {
-unsigned char* PolyglotBook::data() const { return bookData; }
-
-size_t PolyglotBook::data_size() const { return bookDataLength; }
-
-size_t PolyglotBook::find_first_pos(Key key) const {
-    assert(has_data());
-
-    size_t        low = 0, mid, high = total_entries() - 1;
-    PolyglotEntry e;
-
-    assert(low <= high);
-
-    size_t curPos;
-    while (low < high)
+    // Add 'special move' flags and verify it is legal
+    for (const auto& m : MoveList<LEGAL>(pos))
     {
-        mid = (low + high) / 2;
+        if (move.raw()
+            == (m.raw() & (~(3 << 14))))  //  compare with MoveType (bit 14-15)  masked out
+            return m;
+    }
 
-        assert(mid >= low && mid < high);
+    return Move::none();
+}
+int PolyBook::find_first_key(uint64_t key) {
+    index_first        = -1;
+    index_count        = 0;
+    index_weight_count = 0;
+    index_best         = -1;
+    index_rand         = -1;
 
-        curPos = mid * sizeof(PolyglotEntry);
-        read_poly_entry(e, curPos, bookData, bookDataLength);
+    int start = 0;
+    int end   = keycount;
 
-        if (key <= e.key)
-            high = mid;
+    for (;;)
+    {
+        int mid = (end + start) / 2;
+
+        if (polyhash[mid].key < key)
+            start = mid;
         else
-            low = mid + 1;
+        {
+            if (polyhash[mid].key > key)
+                end = mid;
+            else
+            {
+                start = max(mid - 4, 0);
+                end   = min(mid + 4, keycount);
+            }
+        }
+
+        if (end - start < 9)
+            break;
     }
 
-    assert(low == high);
-
-    return low;
-}
-
-bool PolyglotBook::has_data() const { return bookData && bookDataLength; }
-
-size_t PolyglotBook::total_entries() const {
-    if (!has_data())
-        return 0;
-
-    return bookDataLength / sizeof(PolyglotEntry);
-}
-
-void PolyglotBook::get_moves(const Position& pos, vector<PolyglotBookMove>& bookMoves) const {
-    //Clear
-    bookMoves.clear();
-
-    //Find moves
-    Key           key = Polyglot_key(pos);
-    PolyglotEntry e;
-
-    size_t curPos = find_first_pos(key) * sizeof(PolyglotEntry);
-    while (true)
+    for (int i = start; i < end; i++)
     {
-        //Read a new entry
-        read_poly_entry(e, curPos, bookData, bookDataLength);
+        if (key == polyhash[i].key)
+        {
+            index_first = i;
+            while ((index_first > 0) && (key == polyhash[index_first - 1].key))
+                index_first--;
+            return get_key_data();
+        }
+    }
 
-        //Check if this is the entry we are looking for
-        if (e.key != key)
+    return -1;
+}
+
+int PolyBook::get_key_data() {
+    int best_weight    = polyhash[index_first].weight;
+    index_weight_count = best_weight;
+    uint64_t key       = polyhash[index_first].key;
+
+    index_count = 1;
+    index_best  = index_first;
+
+    for (int i = index_first + 1; i < keycount; i++)
+    {
+        if (polyhash[i].key != key)
             break;
 
-        //Skip moves with zero count!
-        if (e.count == 0)
-            continue;
-
-        Move move = make_move(e);
-        for (const auto& m : MoveList<LEGAL>(pos))
+        index_count++;
+        index_weight_count += polyhash[i].weight;
+        if (polyhash[i].weight > best_weight)
         {
-            if (move.raw() == (m.raw() ^ m.type_of()))
-            {
-                bookMoves.push_back(PolyglotBookMove(e, m));
-            }
-        }
-    }
-}
-
-PolyglotBook::PolyglotBook() :
-    filename(),
-    bookData(nullptr),
-    bookDataLength(0) {}
-
-PolyglotBook::~PolyglotBook() { close(); }
-
-string PolyglotBook::type() const { return "BIN"; }
-
-void PolyglotBook::close() {
-    if (bookData)
-        free(bookData);
-
-    bookData       = nullptr;
-    bookDataLength = 0;
-    filename.clear();
-}
-
-bool PolyglotBook::open(const string& f) {
-    //If same file and same size -> nothing to do
-    if (Utility::is_same_file(f, filename) && Utility::get_file_size(f) == bookDataLength)
-        return true;
-
-    //Close current file
-    close();
-
-    //If no file name is given -> nothing to do
-    if (Utility::is_empty_filename(f))
-        return true;
-
-    Utility::FileMapping fm;
-    if (!fm.map(Utility::map_path(f), false))
-    {
-        sync_cout << "info string Could not open book file: " << f << sync_endl;
-        return false;
-    }
-
-    void* inData = malloc(fm.data_size());
-    if (!inData)
-    {
-        sync_cout << "info string Could not allocate " << Utility::format_bytes(fm.data_size(), 2)
-                  << " of memory for reading book file: " << f << sync_endl;
-        return false;
-    }
-
-    //Read
-    memcpy(inData, fm.data(), fm.data_size());
-
-    //Assign variables and read data from file
-    bookDataLength = fm.data_size();
-    bookData       = (unsigned char*) inData;
-    filename       = f;
-
-    //Close the book file
-    fm.unmap();
-
-    sync_cout << "info string BIN Book [" << f << "] opened successfully" << sync_endl;
-
-    return has_data();
-}
-
-Move PolyglotBook::probe(const Position& pos, size_t width, bool /*onlyGreen*/) const {
-    if (!has_data())
-        return Move::none();
-
-    vector<PolyglotBookMove> bookMoves;
-    get_moves(pos, bookMoves);
-
-    if (!bookMoves.size())
-        return Move::none();
-
-#if 1
-    //Remove any move with REALLY low weight compared to the total weight of all moves
-    //Such moves appear with probability 0% in SCID
-
-    //Calculate total weight for all moves
-    uint64_t totalWeight = 0;
-    for (const PolyglotBookMove& mv : bookMoves)
-        totalWeight += mv.entry.count;
-
-    //Remove moves with weight percentage less than 0.5%
-    bookMoves.erase(remove_if(bookMoves.begin(), bookMoves.end(),
-                              [&totalWeight](const PolyglotBookMove& x) {
-                                  return (uint64_t) x.entry.count * 200 < totalWeight;
-                              }),
-                    bookMoves.end());
-#endif
-
-    //Sort moves accorging to their weights
-    stable_sort(bookMoves.begin(), bookMoves.end(),
-                [](const PolyglotBookMove& mv1, const PolyglotBookMove& mv2) {
-                    return mv1.entry.count > mv2.entry.count;
-                });
-
-    //Only keep the top 'width' moves in the list
-    while (bookMoves.size() > width)
-        bookMoves.pop_back();
-
-    size_t selectedMoveIndex = 0;
-    if (bookMoves.size() > 1)
-    {
-        //Although not needed, let's shuffle candidate book moves just in case the random engine is more biased towards the middle
-        shuffle(bookMoves.begin(), bookMoves.end(), randomEngine);
-
-        //Return a random move
-        selectedMoveIndex = (randomEngine() - randomEngine.min()) % bookMoves.size();
-    }
-
-    //Although not needed, let's shuffle candidate book moves just in case the random engine is more biased towards the middle
-    shuffle(bookMoves.begin(), bookMoves.end(), randomEngine);
-
-    //Return a random move
-    return bookMoves[selectedMoveIndex].move;
-}
-
-void PolyglotBook::show_moves(const Position& pos) const {
-    stringstream ss;
-
-    if (!has_data())
-    {
-        assert(false);
-        ss << "No book loaded" << endl;
-    }
-    else
-    {
-        vector<PolyglotBookMove> bookMoves;
-        get_moves(pos, bookMoves);
-
-        if (bookMoves.size() == 0)
-        {
-            ss << "No moves found for this position" << endl;
-        }
-        else
-        {
-            stable_sort(bookMoves.begin(), bookMoves.end(),
-                        [](const PolyglotBookMove& bm1, const PolyglotBookMove& bm2) {
-                            return bm1.entry.count > bm2.entry.count;
-                        });
-
-            for (size_t i = 0; i < bookMoves.size(); ++i)
-            {
-                ss << setw(2) << setfill(' ') << left << (i + 1) << ": " << setw(5) << setfill(' ')
-                   << left << UCI::move(bookMoves[i].move, pos.is_chess960())
-                   << ", count: " << setw(4) << setfill(' ') << left << bookMoves[i].entry.count
-                   << endl;
-            }
+            best_weight = polyhash[i].weight;
+            index_best  = i;
         }
     }
 
-    cout << ss.str() << endl;
+    int rand_pos     = (rng.rand<uint32_t>() % index_weight_count);
+    int weight_count = 0;
+    index_rand       = index_best;
+
+    for (int i = index_first; i < index_first + index_count; i++)
+    {
+        if ((rand_pos >= weight_count) && (rand_pos < weight_count + polyhash[i].weight))
+        {
+            index_rand = i;
+            break;
+        }
+        weight_count += polyhash[i].weight;
+    }
+
+    return index_count;
 }
+
+bool PolyBook::check_draw(Position& pos, Move m) {
+    StateInfo st;
+
+    pos.do_move(m, st, pos.gives_check(m), nullptr);
+    bool draw = pos.is_draw(pos.game_ply());
+    pos.undo_move(m);
+
+    return draw;
+}
+
 }

@@ -48,6 +48,11 @@
 
 namespace Hypnos::Eval::NNUE {
 
+using BiasType       = std::int16_t;
+using WeightType     = std::int16_t;
+using PSQTWeightType = std::int32_t;
+using IndexType      = std::uint32_t;
+
 // Version of the evaluation file
 constexpr std::uint32_t Version = 0x7AF32F20u;
 
@@ -76,7 +81,6 @@ constexpr std::size_t MaxSimdWidth = 32;
 
 // Type of input feature after conversion
 using TransformedFeatureType = std::uint8_t;
-using IndexType              = std::uint32_t;
 
 // Round n up to be a multiple of base
 template<typename IntType>
@@ -112,7 +116,7 @@ inline IntType read_little_endian(std::istream& stream) {
 
 // Utility to write an integer (signed or unsigned, any size)
 // to a stream in little-endian order. We swap the byte order before the write if
-// necessary to always write in little endian order, independently of the byte
+// necessary to always write in little-endian order, independently of the byte
 // ordering of the compiling machine.
 template<typename IntType>
 inline void write_little_endian(std::ostream& stream, IntType value) {
@@ -141,8 +145,8 @@ inline void write_little_endian(std::ostream& stream, IntType value) {
 }
 
 
-// Read integers in bulk from a little indian stream.
-// This reads N integers from stream s and put them in array out.
+// Read integers in bulk from a little-endian stream.
+// This reads N integers from stream s and puts them in array out.
 template<typename IntType>
 inline void read_little_endian(std::istream& stream, IntType* out, std::size_t count) {
     if (IsLittleEndian)
@@ -153,7 +157,7 @@ inline void read_little_endian(std::istream& stream, IntType* out, std::size_t c
 }
 
 
-// Write integers in bulk to a little indian stream.
+// Write integers in bulk to a little-endian stream.
 // This takes N integers from array values and writes them on stream s.
 template<typename IntType>
 inline void write_little_endian(std::ostream& stream, const IntType* values, std::size_t count) {
@@ -165,8 +169,8 @@ inline void write_little_endian(std::ostream& stream, const IntType* values, std
 }
 
 
-// Read N signed integers from the stream s, putting them in
-// the array out. The stream is assumed to be compressed using the signed LEB128 format.
+// Read N signed integers from the stream s, putting them in the array out.
+// The stream is assumed to be compressed using the signed LEB128 format.
 // See https://en.wikipedia.org/wiki/LEB128 for a description of the compression scheme.
 template<typename IntType>
 inline void read_leb_128(std::istream& stream, IntType* out, std::size_t count) {
@@ -216,8 +220,8 @@ inline void read_leb_128(std::istream& stream, IntType* out, std::size_t count) 
 
 
 // Write signed integers to a stream with LEB128 compression.
-// This takes N integers from array values, compress them with the LEB128 algorithm and
-// writes the result on the stream s.
+// This takes N integers from array values, compresses them with
+// the LEB128 algorithm and writes the result on the stream s.
 // See https://en.wikipedia.org/wiki/LEB128 for a description of the compression scheme.
 template<typename IntType>
 inline void write_leb_128(std::ostream& stream, const IntType* values, std::size_t count) {
