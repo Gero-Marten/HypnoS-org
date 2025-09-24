@@ -238,6 +238,24 @@ Engine::Engine(std::optional<std::string> path) :
 
 //#endif
 
+    options.add("Variety",
+                Option(0, 0, 40, [](const Option& opt) {
+                    sync_cout << "info string Variety = " << int(opt) << sync_endl;
+                    return std::nullopt;
+                }));
+
+    options.add("Variety Max Score",
+                Option(50, 0, 300, [](const Option& opt) {
+                    sync_cout << "info string Variety Max Score = " << int(opt) << sync_endl;
+                    return std::nullopt;
+                }));
+
+    options.add("Variety Max Moves",
+                Option(12, 0, 60, [](const Option& opt) {
+                    sync_cout << "info string Variety Max Moves = " << int(opt) << sync_endl;
+                    return std::nullopt;
+                }));
+
     options.add(  //
       "EvalFile", Option(EvalFileDefaultNameBig, [this](const Option& o) {
           load_big_network(o);

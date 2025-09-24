@@ -342,6 +342,16 @@ class Worker {
     size_t                    threadIdx;
     NumaReplicatedAccessToken numaAccessToken;
 
+    // --- HypnoS: per-worker Variety config cache ----------------------------
+    struct VarietyCfg {
+        int enabled  = 0;   // UCI: Variety
+        int maxScore = 50;  // UCI: Variety Max Score
+        int maxMoves = 12;  // UCI: Variety Max Moves
+    };
+
+    VarietyCfg varietyCfg;
+    // ------------------------------------------------------------------------
+
     // Reductions lookup table initialized at startup
     std::array<int, MAX_MOVES> reductions;  // [depth or moveNumber]
 
