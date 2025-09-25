@@ -60,29 +60,6 @@ namespace Hypnos {
 
 namespace TB = Tablebases;
 
-// --- ProbCut calm helper (file-scope, inside Hypnos) -----------------------
-namespace {
-inline bool allow_probcut_calm(const Position& pos,
-                               Move ttMove,
-                               Value deltaEval,
-                               CapturePieceToHistory* captureHistory,
-                               int attackersThreshold) {
-    if (attackersThreshold <= 0) return true;
-    MovePicker probe(pos, ttMove, deltaEval, captureHistory);
-    int cnt = 0;
-    Move m;
-    while ((m = probe.next_move()) != Move::none()) {
-        if (!pos.legal(m)) continue;
-        if (pos.see_ge(m, 0) || pos.gives_check(m)) {
-            if (++cnt >= attackersThreshold) break;
-        }
-    }
-    return cnt >= attackersThreshold;
-}
-} // anonymous namespace
-// ---------------------------------------------------------------------------
-
-
 void syzygy_extend_pv(const OptionsMap&            options,
                       const Search::LimitsType&    limits,
                       Hypnos::Position&         pos,
@@ -1340,18 +1317,11 @@ if constexpr (!PvNode)
     // If we have a good enough capture (or queen promotion) and a reduced search
     // returns a value much above beta, we can (almost) safely prune the previous move.
     probCutBeta = beta + 224 - 64 * improving;
-
     if (depth >= 3
         && !is_decisive(beta)
-        // If value from transposition table is lower than probCutBeta, don't attempt probCut there
-        && !(is_valid(ttData.value) && ttData.value < probCutBeta)
-        // Optional calm filter: allow ProbCut only if enough plausible captures exist
-        && ( !bool(options["ProbCut Calm Filter"])
-             || allow_probcut_calm(pos,
-                                   ttData.move,
-                                   probCutBeta - ss->staticEval,
-                                   &captureHistory,
-                                   int(options["ProbCut Attackers Thr"])) ) )
+        // If value from transposition table is lower than probCutBeta, don't attempt
+        // probCut there
+        && !(is_valid(ttData.value) && ttData.value < probCutBeta))
     {
         assert(probCutBeta < VALUE_INFINITE && probCutBeta > beta);
 
@@ -1404,6 +1374,7 @@ moves_loop:  // When in check, search starts here
       (ss - 1)->continuationHistory, (ss - 2)->continuationHistory, (ss - 3)->continuationHistory,
       (ss - 4)->continuationHistory, (ss - 5)->continuationHistory, (ss - 6)->continuationHistory};
 
+
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
                   &pawnHistory, ss->ply);
 
@@ -1411,12 +1382,12 @@ moves_loop:  // When in check, search starts here
 
     int moveCount = 0;
 
-    // --- Quiet SEE gating config (local) ------------------------------------
-    const bool useQuietGating = bool(options["Quiet SEE Gating"]);
-    const int  quietKeep      = int(options["Quiet SEE Moves"]);
-    const int  quietThr       = int(options["Quiet SEE Threshold (cp)"]);
-    int        quietSeen      = 0;
-    // ------------------------------------------------------------------------
+																			   
+																  
+																
+																		 
+								  
+																			   
 
     // Step 13. Loop through all pseudo-legal moves until no moves remain
     // or a beta cutoff occurs.
@@ -1435,24 +1406,7 @@ moves_loop:  // When in check, search starts here
         // Move List. In MultiPV mode we also skip PV moves that have been already
         // searched and those of lower "TB rank" if we are in a TB root position.
         if (rootNode && !std::count(rootMoves.begin() + pvIdx, rootMoves.begin() + pvLast, move))
-        continue;
-
-    // Quiet SEE gating: after the first N quiet moves, discard quiet with bad SEE
-        if (PvNode)
-            (ss + 1)->pv = nullptr;
-
-        extension  = 0;
-        capture    = pos.capture_stage(move);
-        movedPiece = pos.moved_piece(move);
-        givesCheck = pos.gives_check(move);
-
-        // Quiet SEE gating: after the first N quiet moves, discard quiet with bad SEE
-        if (useQuietGating && !capture) {
-            if (++quietSeen > quietKeep) {
-                if (!givesCheck && !pos.see_ge(move, quietThr))
-                    continue;
-            }
-        }
+            continue;
 
         ss->moveCount = ++moveCount;
 
@@ -1461,6 +1415,13 @@ moves_loop:  // When in check, search starts here
             main_manager()->updates.onIter(
               {depth, UCIEngine::move(move, pos.is_chess960()), moveCount + pvIdx});
         }
+        if (PvNode)
+            (ss + 1)->pv = nullptr;
+
+        extension  = 0;
+        capture    = pos.capture_stage(move);
+        movedPiece = pos.moved_piece(move);
+        givesCheck = pos.gives_check(move);
 
         (ss + 1)->quietMoveStreak = capture ? 0 : (ss->quietMoveStreak + 1);
 

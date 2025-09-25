@@ -211,16 +211,6 @@ Engine::Engine(std::optional<std::string> path) :
                            return std::make_optional(std::string("info string Dyn Complexity Gain (%) = ") + std::to_string(int(o)));
                        }));
 
-    // --- Quiet SEE gating + ProbCut calm filter -----------------------------
-    options.add("Quiet SEE Gating",          Option(false));
-    options.add("Quiet SEE Moves",           Option(0, 0, 60));
-    options.add("Quiet SEE Threshold (cp)",  Option(0, -200, 200));
-
-    options.add("ProbCut Calm Filter",       Option(false));
-    options.add("ProbCut Attackers Thr",     Option(0, 0, 8));
-
-    // --- end NNUE dynamic profile knobs ------------------------------------
-
     options.add(  //
       "SyzygyPath", Option("", [](const Option& o) {
           Tablebases::init(o);
@@ -347,7 +337,7 @@ Engine::Engine(std::optional<std::string> path) :
 
     // --- NNUE dynamic/manual weights ---------------------------------------
     options.add("NNUE Dynamic Weights",
-                Option(true, [](const Option& opt) {
+                Option(false, [](const Option& opt) {
                     // Toggle Dynamic mode on/off. Last change wins.
                     Hypnos::Eval::set_weights_mode(opt ? Hypnos::Eval::WeightsMode::Dynamic
                                                        : Hypnos::Eval::WeightsMode::Default);
