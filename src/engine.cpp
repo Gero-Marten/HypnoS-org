@@ -45,6 +45,7 @@
 #include "uci.h"
 #include "ucioption.h"
 #include "eval_weights.h"  // NNUE blending weights config
+#include "eval.h"
 
 // --- HypnoS Experience integration ---
 #ifdef HYP_FIXED_ZOBRIST
@@ -150,65 +151,56 @@ Engine::Engine(std::optional<std::string> path) :
     // Debug: print NNUE weights once per search at root (main thread)
     options.add("NNUE Log Weights", Option(false));
 
+    // Helper: apply all Dyn profile knobs at once (read from UCI options)
+    auto push_dyn_profiles = [this]() -> std::optional<std::string> {
+        const int openMat = int(options["Dyn Open Mat"]);
+        const int openPos = int(options["Dyn Open Pos"]);
+        const int egMat   = int(options["Dyn Endgame Mat"]);
+        const int egPos   = int(options["Dyn Endgame Pos"]);
+        const int comp    = int(options["Dyn Complexity Gain (%)"]);
+        Hypnos::Eval::set_dynamic_profiles(openMat, openPos, egMat, egPos, comp);
+        return std::nullopt;
+    };
+
     // --- NNUE dynamic profile knobs (active when mode = Dynamic) -----------
     options.add("Dyn Open Mat",
                 Option(115, 50, 200,
-                       [](const Option& o) -> std::optional<std::string> {
-                           Hypnos::Eval::set_dynamic_profiles(
-                               int(o),
-                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
-                           return std::make_optional(std::string("info string Dyn Open Mat = ") + std::to_string(int(o)));
+                       [push_dyn_profiles](const Option& o) -> std::optional<std::string> {
+                           push_dyn_profiles();
+                           return std::make_optional(
+                               std::string("info string Dyn Open Mat = ") + std::to_string(int(o)));
                        }));
 
     options.add("Dyn Open Pos",
                 Option(145, 50, 200,
-                       [](const Option& o) -> std::optional<std::string> {
-                           Hypnos::Eval::set_dynamic_profiles(
-                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
-                               int(o),
-                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
-                           return std::make_optional(std::string("info string Dyn Open Pos = ") + std::to_string(int(o)));
+                       [push_dyn_profiles](const Option& o) -> std::optional<std::string> {
+                           push_dyn_profiles();
+                           return std::make_optional(
+                               std::string("info string Dyn Open Pos = ") + std::to_string(int(o)));
                        }));
 
     options.add("Dyn Endgame Mat",
                 Option(145, 50, 200,
-                       [](const Option& o) -> std::optional<std::string> {
-                           Hypnos::Eval::set_dynamic_profiles(
-                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
-                               int(o),
-                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
-                           return std::make_optional(std::string("info string Dyn Endgame Mat = ") + std::to_string(int(o)));
+                       [push_dyn_profiles](const Option& o) -> std::optional<std::string> {
+                           push_dyn_profiles();
+                           return std::make_optional(
+                               std::string("info string Dyn Endgame Mat = ") + std::to_string(int(o)));
                        }));
 
     options.add("Dyn Endgame Pos",
                 Option(115, 50, 200,
-                       [](const Option& o) -> std::optional<std::string> {
-                           Hypnos::Eval::set_dynamic_profiles(
-                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
-                               int(o),
-                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
-                           return std::make_optional(std::string("info string Dyn Endgame Pos = ") + std::to_string(int(o)));
+                       [push_dyn_profiles](const Option& o) -> std::optional<std::string> {
+                           push_dyn_profiles();
+                           return std::make_optional(
+                               std::string("info string Dyn Endgame Pos = ") + std::to_string(int(o)));
                        }));
 
     options.add("Dyn Complexity Gain (%)",
                 Option(12, 0, 50,
-                       [](const Option& o) -> std::optional<std::string> {
-                           Hypnos::Eval::set_dynamic_profiles(
-                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
-                               int(o));
-                           return std::make_optional(std::string("info string Dyn Complexity Gain (%) = ") + std::to_string(int(o)));
+                       [push_dyn_profiles](const Option& o) -> std::optional<std::string> {
+                           push_dyn_profiles();
+                           return std::make_optional(
+                               std::string("info string Dyn Complexity Gain (%) = ") + std::to_string(int(o)));
                        }));
 
     options.add(  //

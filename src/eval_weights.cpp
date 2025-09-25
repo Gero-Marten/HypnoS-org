@@ -17,6 +17,7 @@
 */
 
 #include "eval_weights.h"
+#include "eval.h"
 
 namespace Hypnos::Eval {
 

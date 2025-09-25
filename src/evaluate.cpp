@@ -35,6 +35,7 @@
 #include "uci.h"
 #include "nnue/nnue_accumulator.h"
 #include "eval_weights.h"
+#include "eval.h"
 
 namespace Hypnos {
 
