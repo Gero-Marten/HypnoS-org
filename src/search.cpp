@@ -40,7 +40,8 @@
 #include "uci.h"    // for UCI::value / UCI::move nelle info
 #include "misc.h"   // for Utility::is_game_decided(...)
 #include "bitboard.h"
-#include "evaluate.h"
+#include "eval_weights.h"   // access gEvalWeights / WeightsMode
+#include "evaluate.h"       // Eval::use_smallnet()
 #include "history.h"
 #include "misc.h"
 #include "movegen.h"
@@ -58,6 +59,29 @@
 namespace Hypnos {
 
 namespace TB = Tablebases;
+
+// --- ProbCut calm helper (file-scope, inside Hypnos) -----------------------
+namespace {
+inline bool allow_probcut_calm(const Position& pos,
+                               Move ttMove,
+                               Value deltaEval,
+                               CapturePieceToHistory* captureHistory,
+                               int attackersThreshold) {
+    if (attackersThreshold <= 0) return true;
+    MovePicker probe(pos, ttMove, deltaEval, captureHistory);
+    int cnt = 0;
+    Move m;
+    while ((m = probe.next_move()) != Move::none()) {
+        if (!pos.legal(m)) continue;
+        if (pos.see_ge(m, 0) || pos.gives_check(m)) {
+            if (++cnt >= attackersThreshold) break;
+        }
+    }
+    return cnt >= attackersThreshold;
+}
+} // anonymous namespace
+// ---------------------------------------------------------------------------
+
 
 void syzygy_extend_pv(const OptionsMap&            options,
                       const Search::LimitsType&    limits,
@@ -187,6 +211,78 @@ void Search::Worker::start_searching() {
     varietyCfg.enabled  = int(options["Variety"]);
     varietyCfg.maxScore = int(options["Variety Max Score"]);
     varietyCfg.maxMoves = int(options["Variety Max Moves"]);
+
+    // Root-only NNUE weights log (prints once per search when enabled)
+    if (is_mainthread() && bool(options["NNUE Log Weights"])) {
+        using Hypnos::Eval::WeightsMode;
+
+        // 1) Decide small/big net like evaluate()
+        bool smallNet = Hypnos::Eval::use_smallnet(rootPos);
+        auto& nets    = networks[numaAccessToken];
+        auto [psqt, positional] = smallNet
+            ? nets.small.evaluate(rootPos, accumulatorStack, &refreshTable.small)
+            : nets.big.evaluate(rootPos, accumulatorStack, &refreshTable.big);
+
+        // 2) Compute current weights like evaluate() (Default / Manual / Dynamic)
+        int wMat = 125;
+        int wPos = 131;
+        int t    = -1; // phase (0..1024) only meaningful in Dynamic
+
+        switch (static_cast<WeightsMode>(Hypnos::Eval::gEvalWeights.mode.load())) {
+        case WeightsMode::Manual: {
+            wMat = Hypnos::Eval::gEvalWeights.manualMat.load();
+            wPos = Hypnos::Eval::gEvalWeights.manualPos.load();
+            break;
+        }
+        case WeightsMode::Dynamic: {
+            // Tapered game phase 0..24 -> t in 0..1024
+            int gamePhase = 0;
+            gamePhase += rootPos.count<KNIGHT>() + rootPos.count<BISHOP>();
+            gamePhase += 2 * rootPos.count<ROOK>();
+            gamePhase += 4 * rootPos.count<QUEEN>();
+            if (gamePhase < 0)  gamePhase = 0;
+            if (gamePhase > 24) gamePhase = 24;
+            t = (gamePhase * 1024) / 24;
+
+            const int oM = Hypnos::Eval::gEvalWeights.dynOpenMat.load();
+            const int oP = Hypnos::Eval::gEvalWeights.dynOpenPos.load();
+            const int eM = Hypnos::Eval::gEvalWeights.dynEgMat.load();
+            const int eP = Hypnos::Eval::gEvalWeights.dynEgPos.load();
+
+            wMat = (eM * (1024 - t) + oM * t) / 1024;
+            wPos = (eP * (1024 - t) + oP * t) / 1024;
+
+            // Complexity boost (same as evaluate())
+            const int complexity = std::abs(psqt - positional);
+            const int cg         = Hypnos::Eval::gEvalWeights.dynComplexityGain.load(); // percent
+            wPos += (wPos * cg * std::min(800, complexity) / 800) / 100;
+            break;
+        }
+        case WeightsMode::Default:
+        default:
+            break;
+        }
+
+        // 3) Clamp come in evaluate()
+        wMat = std::min(200, std::max(50, wMat));
+        wPos = std::min(200, std::max(50, wPos));
+
+        // 4) Soglia small->big scalata (baseline 125+131)
+        const int baseThreshold   = 236;
+        const int scaledThreshold = baseThreshold * (wMat + wPos) / (125 + 131);
+
+        // 5) Print single-line info (root only)
+        const auto m = static_cast<WeightsMode>(Hypnos::Eval::gEvalWeights.mode.load());
+        const char* modeStr = (m == WeightsMode::Manual ? "Manual"
+                             : m == WeightsMode::Dynamic ? "Dynamic"
+                             : "Default");
+        sync_cout << "info string NNUE Weights@root mode=" << modeStr
+                  << " wMat=" << wMat << " wPos=" << wPos
+                  << " t=" << t
+                  << " smallNet=" << (smallNet ? "true" : "false")
+                  << " thr=" << scaledThreshold
+                  << sync_endl;
+    }
 
     Move bookMove = Move::none();
 
@@ -1244,11 +1340,18 @@ if constexpr (!PvNode)
     // If we have a good enough capture (or queen promotion) and a reduced search
     // returns a value much above beta, we can (almost) safely prune the previous move.
     probCutBeta = beta + 224 - 64 * improving;
+
     if (depth >= 3
         && !is_decisive(beta)
-        // If value from transposition table is lower than probCutBeta, don't attempt
-        // probCut there
-        && !(is_valid(ttData.value) && ttData.value < probCutBeta))
+        // If value from transposition table is lower than probCutBeta, don't attempt probCut there
+        && !(is_valid(ttData.value) && ttData.value < probCutBeta)
+        // Optional calm filter: allow ProbCut only if enough plausible captures exist
+        && ( !bool(options["ProbCut Calm Filter"])
+             || allow_probcut_calm(pos,
+                                   ttData.move,
+                                   probCutBeta - ss->staticEval,
+                                   &captureHistory,
+                                   int(options["ProbCut Attackers Thr"])) ) )
     {
         assert(probCutBeta < VALUE_INFINITE && probCutBeta > beta);
 
@@ -1301,13 +1404,19 @@ moves_loop:  // When in check, search starts here
       (ss - 1)->continuationHistory, (ss - 2)->continuationHistory, (ss - 3)->continuationHistory,
       (ss - 4)->continuationHistory, (ss - 5)->continuationHistory, (ss - 6)->continuationHistory};
 
-
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
                   &pawnHistory, ss->ply);
 
     value = bestValue;
 
     int moveCount = 0;
+
+    // --- Quiet SEE gating config (local) ------------------------------------
+    const bool useQuietGating = bool(options["Quiet SEE Gating"]);
+    const int  quietKeep      = int(options["Quiet SEE Moves"]);
+    const int  quietThr       = int(options["Quiet SEE Threshold (cp)"]);
+    int        quietSeen      = 0;
+    // ------------------------------------------------------------------------
 
     // Step 13. Loop through all pseudo-legal moves until no moves remain
     // or a beta cutoff occurs.
@@ -1326,7 +1435,24 @@ moves_loop:  // When in check, search starts here
         // Move List. In MultiPV mode we also skip PV moves that have been already
         // searched and those of lower "TB rank" if we are in a TB root position.
         if (rootNode && !std::count(rootMoves.begin() + pvIdx, rootMoves.begin() + pvLast, move))
-            continue;
+        continue;
+
+    // Quiet SEE gating: after the first N quiet moves, discard quiet with bad SEE
+        if (PvNode)
+            (ss + 1)->pv = nullptr;
+
+        extension  = 0;
+        capture    = pos.capture_stage(move);
+        movedPiece = pos.moved_piece(move);
+        givesCheck = pos.gives_check(move);
+
+        // Quiet SEE gating: after the first N quiet moves, discard quiet with bad SEE
+        if (useQuietGating && !capture) {
+            if (++quietSeen > quietKeep) {
+                if (!givesCheck && !pos.see_ge(move, quietThr))
+                    continue;
+            }
+        }
 
         ss->moveCount = ++moveCount;
 
@@ -1335,13 +1461,6 @@ moves_loop:  // When in check, search starts here
             main_manager()->updates.onIter(
               {depth, UCIEngine::move(move, pos.is_chess960()), moveCount + pvIdx});
         }
-        if (PvNode)
-            (ss + 1)->pv = nullptr;
-
-        extension  = 0;
-        capture    = pos.capture_stage(move);
-        movedPiece = pos.moved_piece(move);
-        givesCheck = pos.gives_check(move);
 
         (ss + 1)->quietMoveStreak = capture ? 0 : (ss->quietMoveStreak + 1);
 

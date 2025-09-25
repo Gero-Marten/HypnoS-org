@@ -18,7 +18,9 @@
 
 #include "engine.h"
 
-#include <algorithm>
+#include <cmath>      // std::ceil
+#include <algorithm>  // std::max
+#include <optional>
 #include <cassert>
 #include <deque>
 #include <iosfwd>
@@ -42,6 +44,7 @@
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
+#include "eval_weights.h"  // NNUE blending weights config
 
 // --- HypnoS Experience integration ---
 #ifdef HYP_FIXED_ZOBRIST
@@ -50,7 +53,7 @@
 #endif
 
 namespace Hypnos {
-
+	
 #ifdef HYP_FIXED_ZOBRIST
 static void on_exp_enabled(const Option& opt) {
     sync_cout << "info string Experience Enabled is now: "
@@ -130,7 +133,7 @@ Engine::Engine(std::optional<std::string> path) :
 
     options.add("Skill Level", Option(20, 0, 20));
 
-    options.add("MoveOverhead", Option(10, 0, 5000));
+    options.add("Move Overhead", Option(10, 0, 5000));
 
     options.add("nodestime", Option(0, 0, 10000));
 
@@ -143,6 +146,80 @@ Engine::Engine(std::optional<std::string> path) :
                        Hypnos::Search::Skill::HighestElo));
 
     options.add("UCI_ShowWDL", Option(false));
+
+    // Debug: print NNUE weights once per search at root (main thread)
+    options.add("NNUE Log Weights", Option(false));
+
+    // --- NNUE dynamic profile knobs (active when mode = Dynamic) -----------
+    options.add("Dyn Open Mat",
+                Option(115, 50, 200,
+                       [](const Option& o) -> std::optional<std::string> {
+                           Hypnos::Eval::set_dynamic_profiles(
+                               int(o),
+                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
+                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
+                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
+                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
+                           return std::make_optional(std::string("info string Dyn Open Mat = ") + std::to_string(int(o)));
+                       }));
+
+    options.add("Dyn Open Pos",
+                Option(145, 50, 200,
+                       [](const Option& o) -> std::optional<std::string> {
+                           Hypnos::Eval::set_dynamic_profiles(
+                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
+                               int(o),
+                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
+                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
+                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
+                           return std::make_optional(std::string("info string Dyn Open Pos = ") + std::to_string(int(o)));
+                       }));
+
+    options.add("Dyn Endgame Mat",
+                Option(145, 50, 200,
+                       [](const Option& o) -> std::optional<std::string> {
+                           Hypnos::Eval::set_dynamic_profiles(
+                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
+                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
+                               int(o),
+                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
+                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
+                           return std::make_optional(std::string("info string Dyn Endgame Mat = ") + std::to_string(int(o)));
+                       }));
+
+    options.add("Dyn Endgame Pos",
+                Option(115, 50, 200,
+                       [](const Option& o) -> std::optional<std::string> {
+                           Hypnos::Eval::set_dynamic_profiles(
+                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
+                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
+                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
+                               int(o),
+                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
+                           return std::make_optional(std::string("info string Dyn Endgame Pos = ") + std::to_string(int(o)));
+                       }));
+
+    options.add("Dyn Complexity Gain (%)",
+                Option(12, 0, 50,
+                       [](const Option& o) -> std::optional<std::string> {
+                           Hypnos::Eval::set_dynamic_profiles(
+                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
+                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
+                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
+                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
+                               int(o));
+                           return std::make_optional(std::string("info string Dyn Complexity Gain (%) = ") + std::to_string(int(o)));
+                       }));
+
+    // --- Quiet SEE gating + ProbCut calm filter -----------------------------
+    options.add("Quiet SEE Gating",          Option(true));
+    options.add("Quiet SEE Moves",           Option(12, 0, 60));
+    options.add("Quiet SEE Threshold (cp)",  Option(0, -200, 200));
+
+    options.add("ProbCut Calm Filter",       Option(true));
+    options.add("ProbCut Attackers Thr",     Option(3, 0, 8));
+
+    // --- end NNUE dynamic profile knobs ------------------------------------
 
     options.add(  //
       "SyzygyPath", Option("", [](const Option& o) {
@@ -159,21 +236,21 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("Book1", Option(false));
 
     options.add("Book1 File", Option("", [](const Option& o) {
-    polybook[0].init(o);
-    return std::nullopt;
+        polybook[0].init(o);
+        return std::nullopt;
       }));
 
     options.add("Book1 BestBookMove", Option(false));
 
     options.add("Book1 Depth", Option(255, 1, 350));
 
-	options.add("Book1 Width", Option(1, 1, 10));
+    options.add("Book1 Width", Option(1, 1, 10));
 
     options.add("Book2", Option(false));
 
     options.add("Book2 File", Option("", [](const Option& o) {
-    polybook[1].init(o);
-    return std::nullopt;
+        polybook[1].init(o);
+        return std::nullopt;
       }));
 
     options.add("Book2 BestBookMove", Option(false));
@@ -236,7 +313,7 @@ Engine::Engine(std::optional<std::string> path) :
                     return std::nullopt;
                 }));
 
-//#endif
+    //#endif
 
     options.add("Variety",
                 Option(0, 0, 40, [](const Option& opt) {
@@ -267,6 +344,68 @@ Engine::Engine(std::optional<std::string> path) :
           load_small_network(o);
           return std::nullopt;
       }));
+
+    // --- NNUE dynamic/manual weights ---------------------------------------
+    options.add("NNUE Dynamic Weights",
+                Option(true, [](const Option& opt) {
+                    // Toggle Dynamic mode on/off. Last change wins.
+                    Hypnos::Eval::set_weights_mode(opt ? Hypnos::Eval::WeightsMode::Dynamic
+                                                       : Hypnos::Eval::WeightsMode::Default);
+                    sync_cout << "info string NNUE Dynamic Weights is now: "
+                              << (opt ? "enabled (mode=Dynamic)" : "disabled (mode=Default)") << sync_endl;
+                    return std::nullopt;
+                }));
+
+    options.add("NNUE ManualWeights",
+                Option(false, [](const Option& opt) {
+                    // Toggle Manual mode on/off. Last change wins.
+                    Hypnos::Eval::set_weights_mode(opt ? Hypnos::Eval::WeightsMode::Manual
+                                                       : Hypnos::Eval::WeightsMode::Default);
+                    sync_cout << "info string NNUE ManualWeights "
+                              << (opt ? "enabled (mode=Manual)" : "disabled (mode=Default)") << sync_endl;
+                    return std::nullopt;
+                }));
+
+    // --- NNUE strategy manual knobs ----------------------------------------
+    options.add("NNUE StrategyMaterialWeight",
+                Option(0, -12, 12, [](const Option& opt) {
+                    // Treat as delta on top of default 125; keep positional as-is
+                    const int baseMat = 125 + int(opt);
+                    const int curPos  = Hypnos::Eval::gEvalWeights.manualPos.load();
+                    Hypnos::Eval::set_manual_weights(baseMat, curPos);
+                    sync_cout << "info string NNUE StrategyMaterialWeight = 125 + (" << int(opt)
+                              << ") => " << baseMat << sync_endl;
+                    return std::nullopt;
+                }));
+
+    options.add("NNUE StrategyPositionalWeight",
+                Option(0, -12, 12, [](const Option& opt) {
+                    // Treat as delta on top of default 131; keep material as-is
+                    const int basePos = 131 + int(opt);
+                    const int curMat  = Hypnos::Eval::gEvalWeights.manualMat.load();
+                    Hypnos::Eval::set_manual_weights(curMat, basePos);
+                    sync_cout << "info string NNUE StrategyPositionalWeight = 131 + (" << int(opt)
+                              << ") => " << basePos << sync_endl;
+                    return std::nullopt;
+                }));
+
+    // Apply default NNUE mode according to current option defaults
+    if (bool(options["NNUE ManualWeights"]))
+        Hypnos::Eval::set_weights_mode(Hypnos::Eval::WeightsMode::Manual);
+    else if (bool(options["NNUE Dynamic Weights"]))
+        Hypnos::Eval::set_weights_mode(Hypnos::Eval::WeightsMode::Dynamic);
+    else
+        Hypnos::Eval::set_weights_mode(Hypnos::Eval::WeightsMode::Default);
+
+    // Log current NNUE mode at startup (for traceability)
+    {
+        using Hypnos::Eval::WeightsMode;
+        const auto m = static_cast<WeightsMode>(Hypnos::Eval::gEvalWeights.mode.load());
+        const char* modeStr = (m == WeightsMode::Manual ? "Manual"
+                             : m == WeightsMode::Dynamic ? "Dynamic"
+                             : "Default");
+        sync_cout << "info string NNUE Mode at startup: " << modeStr << sync_endl;
+    }
 
     load_networks();
     resize_threads();

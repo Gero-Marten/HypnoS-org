@@ -34,6 +34,7 @@
 #include "types.h"
 #include "uci.h"
 #include "nnue/nnue_accumulator.h"
+#include "eval_weights.h"
 
 namespace Hypnos {
 
@@ -58,17 +59,71 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
 
     assert(!pos.checkers());
 
+    // Precompute material once (used for Dynamic weights and final blend)
+    int material = 535 * pos.count<PAWN>() + pos.non_pawn_material();
+
+    // --- NNUE weights defaults (function-scope) ---
+    int wMat = 125;
+    int wPos = 131;
+
     bool smallNet           = use_smallnet(pos);
     auto [psqt, positional] = smallNet ? networks.small.evaluate(pos, accumulators, &caches.small)
                                        : networks.big.evaluate(pos, accumulators, &caches.big);
 
-    Value nnue = (125 * psqt + 131 * positional) / 128;
+    // --- NNUE weights selection (Default / Manual / Dynamic) ---
+    switch (static_cast<Hypnos::Eval::WeightsMode>(Hypnos::Eval::gEvalWeights.mode.load())) {
+    case Hypnos::Eval::WeightsMode::Manual: {
+        // Manual fixed weights from UCI options
+        wMat = Hypnos::Eval::gEvalWeights.manualMat.load();
+        wPos = Hypnos::Eval::gEvalWeights.manualPos.load();
+        break;
+    }
+    case Hypnos::Eval::WeightsMode::Dynamic: {
+        // Game-phase estimate (tapered): 0..24 -> 0..1024
+        int gamePhase = 0;
+        gamePhase += pos.count<KNIGHT>() + pos.count<BISHOP>(); // minor pieces
+        gamePhase += 2 * pos.count<ROOK>();
+        gamePhase += 4 * pos.count<QUEEN>();
+        if (gamePhase < 0) gamePhase = 0;
+        if (gamePhase > 24) gamePhase = 24;
+        const int t = (gamePhase * 1024) / 24; // 0..1024
+
+        const int oM = Hypnos::Eval::gEvalWeights.dynOpenMat.load();
+        const int oP = Hypnos::Eval::gEvalWeights.dynOpenPos.load();
+        const int eM = Hypnos::Eval::gEvalWeights.dynEgMat.load();
+        const int eP = Hypnos::Eval::gEvalWeights.dynEgPos.load();
+
+        wMat = (eM * (1024 - t) + oM * t) / 1024;
+        wPos = (eP * (1024 - t) + oP * t) / 1024;
+
+        // Light positional boost when NNUE components disagree (proxy for complexity)
+        const int complexity = std::abs(psqt - positional);
+        const int cg         = Hypnos::Eval::gEvalWeights.dynComplexityGain.load(); // percent
+        wPos += (wPos * cg * std::min(800, complexity) / 800) / 100;
+        break;
+    }
+    case Hypnos::Eval::WeightsMode::Default:
+    default:
+        // Keep original behavior (125/131)
+        break;
+    }
+    // --- end of NNUE weights selection ---
+
+    // Sanity clamp to keep weights in a reasonable range
+    wMat = std::min(200, std::max(50, wMat));
+    wPos = std::min(200, std::max(50, wPos));
+
+    // Scale the small->big switch threshold with current weights (baseline 125+131)
+    const int baseThreshold   = 236;
+    const int scaledThreshold = baseThreshold * (wMat + wPos) / (125 + 131);
+
+    Value nnue = (wMat * psqt + wPos * positional) / 128;
 
     // Re-evaluate the position when higher eval accuracy is worth the time spent
-    if (smallNet && (std::abs(nnue) < 236))
+    if (smallNet && (std::abs(nnue) < scaledThreshold))
     {
         std::tie(psqt, positional) = networks.big.evaluate(pos, accumulators, &caches.big);
-        nnue                       = (125 * psqt + 131 * positional) / 128;
+        nnue                       = (wMat * psqt + wPos * positional) / 128;
         smallNet                   = false;
     }
 
@@ -77,8 +132,8 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
     optimism += optimism * nnueComplexity / 468;
     nnue -= nnue * nnueComplexity / 18000;
 
-    int material = 535 * pos.count<PAWN>() + pos.non_pawn_material();
-    int v        = (nnue * (77777 + material) + optimism * (7777 + material)) / 77777;
+    // 'material' already computed above
+    int v = (nnue * (77777 + material) + optimism * (7777 + material)) / 77777;
 
     // Damp down the evaluation linearly when shuffling
     v -= v * pos.rule50_count() / 212;
