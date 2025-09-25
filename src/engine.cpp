@@ -133,7 +133,7 @@ Engine::Engine(std::optional<std::string> path) :
 
     options.add("Skill Level", Option(20, 0, 20));
 
-    options.add("Move Overhead", Option(10, 0, 5000));
+    options.add("MoveOverhead", Option(10, 0, 5000));
 
     options.add("nodestime", Option(0, 0, 10000));
 
@@ -212,12 +212,12 @@ Engine::Engine(std::optional<std::string> path) :
                        }));
 
     // --- Quiet SEE gating + ProbCut calm filter -----------------------------
-    options.add("Quiet SEE Gating",          Option(true));
-    options.add("Quiet SEE Moves",           Option(12, 0, 60));
+    options.add("Quiet SEE Gating",          Option(false));
+    options.add("Quiet SEE Moves",           Option(0, 0, 60));
     options.add("Quiet SEE Threshold (cp)",  Option(0, -200, 200));
 
-    options.add("ProbCut Calm Filter",       Option(true));
-    options.add("ProbCut Attackers Thr",     Option(3, 0, 8));
+    options.add("ProbCut Calm Filter",       Option(false));
+    options.add("ProbCut Attackers Thr",     Option(0, 0, 8));
 
     // --- end NNUE dynamic profile knobs ------------------------------------
 
