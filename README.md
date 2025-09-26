@@ -77,7 +77,57 @@ Duplicate moves are a problem and should be removed by merging with existing mov
 At this point, the experience file is considered fragmented because it contains duplicate moves. The fragmentation percentage is simply: (total duplicate moves) / (total unique moves) * 100
 In this example we have a fragmentation level of: 1/6 * 100 = 16.67%
 
-  ### Experience Readonly
+### Book1
+
+Default: False  
+If activated, the engine will use the external book defined in **Book1 File**.
+
+### Book1 File
+
+Default: `""` (disabled)  
+Path to the Polyglot opening book used as Book1.
+
+### Book1 BestBookMove
+
+Default: False  
+If enabled, only the single best move from the book will be played.
+
+### Book1 Depth
+
+Default: 255 (range: 1–350)  
+Maximum search depth within the opening book.
+
+### Book1 Width
+
+Default: 1 (range: 1–10)  
+Number of candidate moves considered from the book at the same position.
+
+---
+
+### Book2
+
+Default: False  
+If activated, the engine will use the external book defined in **Book2 File**.
+
+### Book2 File
+
+Default: `""` (disabled)  
+Path to the Polyglot opening book used as Book2.
+
+### Book2 BestBookMove
+
+Default: False  
+If enabled, only the single best move from the book will be played.
+
+### Book2 Depth
+
+Default: 255 (range: 1–350)  
+Maximum search depth within the opening book.
+
+### Book2 Width
+
+Default: 1 (range: 1–10)  
+Number of candidate moves considered from the book at the same position.
 
   Default: False If activated, the experience file is only read.
   
