@@ -243,8 +243,8 @@ void Search::Worker::start_searching() {
             const float c   = std::min(800, complexity) / 800.0f;      // [0..1]
             const float c01 = c * (3.0f - 2.0f * c);                    // smoothstep
 
-            // Alpha: max fraction of the raw complexity boost (conservative)
-            const float alpha_max = 0.12f;
+            // Alpha: max fraction of the raw complexity boost (more conservative)
+            const float alpha_max = 0.10f;
             const float d_now     = alpha_max * (wPos * cg * c01 / 100.0f);
 
             // EMA smoothing (lambda = 0.45)
@@ -253,8 +253,8 @@ void Search::Worker::start_searching() {
 
             // Clamp in weight domain (int16-like)
             int delta_i = (int)((d_sm >= 0.0f) ? (d_sm + 0.5f) : (d_sm - 0.5f));
-            if (delta_i >  6) delta_i =  6;
-            if (delta_i < -6) delta_i = -6;
+            if (delta_i >  4) delta_i =  4;
+            if (delta_i < -4) delta_i = -4;
 
             wPos += delta_i;
             break;
@@ -885,7 +885,7 @@ Value Search::Worker::search(
     const bool     allNode  = !(PvNode || cutNode);
 
     // Dynamic weights: OFF in cut nodes and shallow PV nodes
-    if (cutNode || (PvNode && depth < 10))
+    if (cutNode || (PvNode && depth < 12))
         DynGate::enabled = false;
     else
         DynGate::enabled = true;
@@ -930,6 +930,9 @@ Value Search::Worker::search(
 
     // Step 1. Initialize node
     ss->inCheck   = pos.checkers();
+    // Dynamic weights: OFF when in check
+    if (ss->inCheck)
+        DynGate::enabled = false;
     priorCapture  = pos.captured_piece();
     Color us      = pos.side_to_move();
     ss->moveCount = 0;
@@ -1949,6 +1952,9 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
     bestMove    = Move::none();
     ss->inCheck = pos.checkers();
+    // Dynamic weights: OFF when in check
+    if (ss->inCheck)
+        DynGate::enabled = false;
     moveCount   = 0;
 
     // Used to send selDepth info to GUI (selDepth counts from 1, ply from 0)

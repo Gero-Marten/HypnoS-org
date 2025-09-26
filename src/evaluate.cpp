@@ -106,7 +106,7 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
             const float c01 = c * (3.0f - 2.0f * c);                 // smoothstep
 
             // cap the fraction of the raw gain (more conservative)
-            const float alpha_max = 0.12f;
+            const float alpha_max = 0.10f;
             const float d_now     = alpha_max * (wPos * cg * c01 / 100.0f);
 
             // EMA smoothing (lambda = 0.45), per-thread
@@ -116,8 +116,8 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
 
             // clamp to small integer step in weight domain
             int delta_i = (int)((d_sm >= 0.0f) ? (d_sm + 0.5f) : (d_sm - 0.5f));
-            if (delta_i >  6) delta_i =  6;
-            if (delta_i < -6) delta_i = -6;
+            if (delta_i >  4) delta_i =  4;
+            if (delta_i < -4) delta_i = -4;
 
             wPos += delta_i;
         }

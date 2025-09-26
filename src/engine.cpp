@@ -200,7 +200,7 @@ Engine::Engine(std::optional<std::string> path) :
                        }));
 
     options.add("Dyn Complexity Gain (%)",
-                Option(12, 0, 50,
+                Option(10, 0, 50,
                        [](const Option& o) -> std::optional<std::string> {
                            Hypnos::Eval::set_dynamic_profiles(
                                Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
