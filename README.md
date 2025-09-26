@@ -129,6 +129,8 @@ Maximum search depth within the opening book.
 Default: 1 (range: 1–10)  
 Number of candidate moves considered from the book at the same position.
 
+  ### Experience Readonly
+
   Default: False If activated, the experience file is only read.
   
   ### Experience Book
