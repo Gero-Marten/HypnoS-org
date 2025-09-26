@@ -243,18 +243,18 @@ void Search::Worker::start_searching() {
             const float c   = std::min(800, complexity) / 800.0f;      // [0..1]
             const float c01 = c * (3.0f - 2.0f * c);                    // smoothstep
 
-            // Alpha: max fraction of the raw complexity boost
-            const float alpha_max = 0.18f;
+            // Alpha: max fraction of the raw complexity boost (conservative)
+            const float alpha_max = 0.12f;
             const float d_now     = alpha_max * (wPos * cg * c01 / 100.0f);
 
-            // EMA smoothing (lambda = 0.35)
-            const float d_sm = (1.0f - 0.35f) * g_dyn_prev + 0.35f * d_now;
+            // EMA smoothing (lambda = 0.45)
+            const float d_sm = (1.0f - 0.45f) * g_dyn_prev + 0.45f * d_now;
             g_dyn_prev       = d_sm;
 
             // Clamp in weight domain (int16-like)
             int delta_i = (int)((d_sm >= 0.0f) ? (d_sm + 0.5f) : (d_sm - 0.5f));
-            if (delta_i >  8) delta_i =  8;
-            if (delta_i < -8) delta_i = -8;
+            if (delta_i >  6) delta_i =  6;
+            if (delta_i < -6) delta_i = -6;
 
             wPos += delta_i;
             break;
@@ -884,8 +884,8 @@ Value Search::Worker::search(
     constexpr bool rootNode = nodeType == Root;
     const bool     allNode  = !(PvNode || cutNode);
 
-    // Dynamic weights: OFF in shallow PV nodes, otherwise ON
-    if (PvNode && depth < 8)
+    // Dynamic weights: OFF in cut nodes and shallow PV nodes
+    if (cutNode || (PvNode && depth < 10))
         DynGate::enabled = false;
     else
         DynGate::enabled = true;

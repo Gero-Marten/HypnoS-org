@@ -105,19 +105,19 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
             const float c   = std::min(800, complexity) / 800.0f;   // [0..1]
             const float c01 = c * (3.0f - 2.0f * c);                 // smoothstep
 
-            // cap the fraction of the raw gain
-            const float alpha_max = 0.18f;
+            // cap the fraction of the raw gain (more conservative)
+            const float alpha_max = 0.12f;
             const float d_now     = alpha_max * (wPos * cg * c01 / 100.0f);
 
-            // EMA smoothing (lambda = 0.35), per-thread
+            // EMA smoothing (lambda = 0.45), per-thread
             static thread_local float s_dyn_prev_eval = 0.0f;
-            const float d_sm = (1.0f - 0.35f) * s_dyn_prev_eval + 0.35f * d_now;
+            const float d_sm = (1.0f - 0.45f) * s_dyn_prev_eval + 0.45f * d_now;
             s_dyn_prev_eval  = d_sm;
 
             // clamp to small integer step in weight domain
             int delta_i = (int)((d_sm >= 0.0f) ? (d_sm + 0.5f) : (d_sm - 0.5f));
-            if (delta_i >  8) delta_i =  8;
-            if (delta_i < -8) delta_i = -8;
+            if (delta_i >  6) delta_i =  6;
+            if (delta_i < -6) delta_i = -6;
 
             wPos += delta_i;
         }
