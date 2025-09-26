@@ -36,47 +36,6 @@ It leverages distributed computing, allowing anyone to contribute CPU time to su
   #### UCI options
   
 
-  ### CTG/BIN Book File
-
-The file name of the first book file which could be a polyglot (BIN) or Chessbase (CTG) book. To disable this book, use: ```<empty>```
-If the book (CTG or BIN) is in a different directory than the engine executable, then configure the full path of the book file, example:
-```C:\Path\To\My\Book.ctg``` or ```/home/username/path/to/book/bin```
-
-  ### Book Width
-
-The number of moves to consider from the book for the same position. To play best book move, set this option to 1. If a value ```n``` (greater than 1 is configured, the engine will pick **randomly** one of the top ```n``` moves available in the book for the given position
-
-  ### Book Depth
-
-The maximum number of moves to play from the book
-	
-  ### Self-Learning
-
-*	### Experience file structure:
-
-1. e4 (from start position)
-1. c4 (from start position)
-1. Nf3 (from start position)
-1 .. c5 (after 1. e4)
-1 .. d6 (after 1. e4)
-
-2 positions and a total of 5 moves in those positions
-
-Now imagine HypnoS plays 1. e4 again, it will store this move in the experience file, but it will be duplicate because 1. e4 is already stored. The experience file will now contain the following:
-1. e4 (from start position)
-1. c4 (from start position)
-1. Nf3 (from start position)
-1 .. c5 (after 1. e4)
-1 .. d6 (after 1. e4)
-1. e4 (from start position)
-
-Now we have 2 positions, 6 moves, and 1 duplicate move (so effectively the total unique moves is 5)
-
-Duplicate moves are a problem and should be removed by merging with existing moves. The merge operation will take the move with the highst depth and ignore the other ones. However, when the engine loads the experience file it will only merge duplicate moves in memory without saving the experience file (to make startup and loading experience file faster)
-
-At this point, the experience file is considered fragmented because it contains duplicate moves. The fragmentation percentage is simply: (total duplicate moves) / (total unique moves) * 100
-In this example we have a fragmentation level of: 1/6 * 100 = 16.67%
-
 ### Book1
 
 Default: False  
@@ -128,6 +87,34 @@ Maximum search depth within the opening book.
 
 Default: 1 (range: 1–10)  
 Number of candidate moves considered from the book at the same position.
+	
+  ### Self-Learning
+
+*	### Experience file structure:
+
+1. e4 (from start position)
+1. c4 (from start position)
+1. Nf3 (from start position)
+1 .. c5 (after 1. e4)
+1 .. d6 (after 1. e4)
+
+2 positions and a total of 5 moves in those positions
+
+Now imagine HypnoS plays 1. e4 again, it will store this move in the experience file, but it will be duplicate because 1. e4 is already stored. The experience file will now contain the following:
+1. e4 (from start position)
+1. c4 (from start position)
+1. Nf3 (from start position)
+1 .. c5 (after 1. e4)
+1 .. d6 (after 1. e4)
+1. e4 (from start position)
+
+Now we have 2 positions, 6 moves, and 1 duplicate move (so effectively the total unique moves is 5)
+
+Duplicate moves are a problem and should be removed by merging with existing moves. The merge operation will take the move with the highst depth and ignore the other ones. However, when the engine loads the experience file it will only merge duplicate moves in memory without saving the experience file (to make startup and loading experience file faster)
+
+At this point, the experience file is considered fragmented because it contains duplicate moves. The fragmentation percentage is simply: (total duplicate moves) / (total unique moves) * 100
+In this example we have a fragmentation level of: 1/6 * 100 = 16.67%
+
 
   ### Experience Readonly
 
