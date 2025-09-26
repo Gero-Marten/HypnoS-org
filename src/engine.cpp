@@ -152,7 +152,7 @@ Engine::Engine(std::optional<std::string> path) :
 
     // --- NNUE dynamic profile knobs (active when mode = Dynamic) -----------
     options.add("Dyn Open Mat",
-                Option(115, 50, 200,
+                Option(122, 50, 200,
                        [](const Option& o) -> std::optional<std::string> {
                            Hypnos::Eval::set_dynamic_profiles(
                                int(o),
@@ -164,7 +164,7 @@ Engine::Engine(std::optional<std::string> path) :
                        }));
 
     options.add("Dyn Open Pos",
-                Option(145, 50, 200,
+                Option(138, 50, 200,
                        [](const Option& o) -> std::optional<std::string> {
                            Hypnos::Eval::set_dynamic_profiles(
                                Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
@@ -176,7 +176,7 @@ Engine::Engine(std::optional<std::string> path) :
                        }));
 
     options.add("Dyn Endgame Mat",
-                Option(145, 50, 200,
+                Option(138, 50, 200,
                        [](const Option& o) -> std::optional<std::string> {
                            Hypnos::Eval::set_dynamic_profiles(
                                Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
@@ -188,7 +188,7 @@ Engine::Engine(std::optional<std::string> path) :
                        }));
 
     options.add("Dyn Endgame Pos",
-                Option(115, 50, 200,
+                Option(122, 50, 200,
                        [](const Option& o) -> std::optional<std::string> {
                            Hypnos::Eval::set_dynamic_profiles(
                                Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
@@ -337,7 +337,7 @@ Engine::Engine(std::optional<std::string> path) :
 
     // --- NNUE dynamic/manual weights ---------------------------------------
     options.add("NNUE Dynamic Weights",
-                Option(false, [](const Option& opt) {
+                Option(true, [](const Option& opt) {
                     // Toggle Dynamic mode on/off. Last change wins.
                     Hypnos::Eval::set_weights_mode(opt ? Hypnos::Eval::WeightsMode::Dynamic
                                                        : Hypnos::Eval::WeightsMode::Default);

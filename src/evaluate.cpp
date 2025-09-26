@@ -35,6 +35,7 @@
 #include "uci.h"
 #include "nnue/nnue_accumulator.h"
 #include "eval_weights.h"
+#include "dyn_gate.h"
 
 namespace Hypnos {
 
@@ -96,11 +97,32 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
         wMat = (eM * (1024 - t) + oM * t) / 1024;
         wPos = (eP * (1024 - t) + oP * t) / 1024;
 
-        // Light positional boost when NNUE components disagree (proxy for complexity)
+        // Dynamic complexity boost (gated, smoothed, clamped)
         const int complexity = std::abs(psqt - positional);
         const int cg         = Hypnos::Eval::gEvalWeights.dynComplexityGain.load(); // percent
-        wPos += (wPos * cg * std::min(800, complexity) / 800) / 100;
+        if (DynGate::enabled) {
+            // normalize complexity to [0,1] and squash it (smoothstep)
+            const float c   = std::min(800, complexity) / 800.0f;   // [0..1]
+            const float c01 = c * (3.0f - 2.0f * c);                 // smoothstep
+
+            // cap the fraction of the raw gain
+            const float alpha_max = 0.18f;
+            const float d_now     = alpha_max * (wPos * cg * c01 / 100.0f);
+
+            // EMA smoothing (lambda = 0.35), per-thread
+            static thread_local float s_dyn_prev_eval = 0.0f;
+            const float d_sm = (1.0f - 0.35f) * s_dyn_prev_eval + 0.35f * d_now;
+            s_dyn_prev_eval  = d_sm;
+
+            // clamp to small integer step in weight domain
+            int delta_i = (int)((d_sm >= 0.0f) ? (d_sm + 0.5f) : (d_sm - 0.5f));
+            if (delta_i >  8) delta_i =  8;
+            if (delta_i < -8) delta_i = -8;
+
+            wPos += delta_i;
+        }
         break;
+
     }
     case Hypnos::Eval::WeightsMode::Default:
     default:
