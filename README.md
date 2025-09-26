@@ -35,31 +35,6 @@ It leverages distributed computing, allowing anyone to contribute CPU time to su
 
   #### UCI options
   
-  ###  Time Contempt
-
-Type: Integer
-Default Value: 20
-Range: -100 to 100
-Description:
-This option sets the engine's "time contempt" factor, which influences how aggressively the engine utilizes its allocated time during the search. The value determines whether the engine should conserve time for future moves or spend more time searching for the best move at the current position.
-
-Purpose:
-Helps balance time management strategies based on the game situation.
-Encourages aggressive play by spending more time in critical positions or conservative play by saving time for later.
-How It Works:
-Positive Values (e.g., 20):
-The engine is more willing to spend time in earlier moves, searching deeper in critical positions.
-Suitable for situations where early-game accuracy is critical.
-Negative Values (e.g., -20):
-The engine becomes more conservative with time usage, preserving resources for later stages of the game.
-Useful in positions where time control or efficiency is essential.
-Use Cases:
-High Positive Values (e.g., 50 to 100):
-Encourages deep analysis and aggressive play early in the game.
-Ideal for long time controls or when playing for a win.
-High Negative Values (e.g., -50 to -100):
-Promotes cautious time management and efficiency.
-Suitable for shorter time controls or drawish positions.
 
   ### CTG/BIN Book File
 
@@ -235,37 +210,6 @@ Description: endgame profile for positional weight (Dynamic).
 Type: Integer (0..50) — Default: 12
 
 Description: small percentage boost on wPos when the NNUE components disagree (large |psqt - positional|).
-
-  ### Quiet SEE Gating
-
-Type: Boolean — Default: true
-
-Description: after N quiet moves, skip quiet with SEE below a threshold. Speeds up by pruning obviously weak non-captures late in the list.
-
-  ### Quiet SEE Moves
-
-Type: Integer (0..60) — Default: 12
-
-Description: number of quiet unfiltered; from (N+1) apply the SEE gate.
-
-  ### Quiet SEE Threshold (cp)
-
-Type: Integer (centipawns) (-200..200) — Default: 0
-
-Description: minimum SEE required to keep the quiet (after the move-count gate).
-
-  ### ProbCut Calm Filter
-
-Type: Boolean — Default: true
-
-Description: enable ProbCut only when the node is tactically “hot” enough: require a minimum number of plausible captures (SEE≥0) or checks.
-
-  ### ProbCut Attackers Thr
-
-Type: Integer (0..8) — Default: 3
-
-Description: minimum count of plausible captures/checks to allow ProbCut.
-Higher = ProbCut only in very hot nodes; 0 = no filter.
 
   ### (Debug) NNUE Log Weights
 
