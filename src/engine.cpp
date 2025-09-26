@@ -337,7 +337,7 @@ Engine::Engine(std::optional<std::string> path) :
 
     // --- NNUE dynamic/manual weights ---------------------------------------
     options.add("NNUE Dynamic Weights",
-                Option(false, [](const Option& opt) {
+                Option(true, [](const Option& opt) {
                     // Toggle Dynamic mode on/off. Last change wins.
                     Hypnos::Eval::set_weights_mode(opt ? Hypnos::Eval::WeightsMode::Dynamic
                                                        : Hypnos::Eval::WeightsMode::Default);
