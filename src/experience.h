@@ -225,11 +225,6 @@ void merge(int argc, char* argv[]);
 void show_exp(Hypnos::Position& pos, bool extended);
 void convert_compact_pgn(int argc, char* argv[]);
 
-void import_cpgn(int argc, char* argv[]);
-void import_pgn (int argc, char* argv[]);
-void cpgn_to_exp(int argc, char* argv[]);
-void pgn_to_exp (int argc, char* argv[]);
-
 void pause_learning();
 void resume_learning();
 bool is_learning_paused();
