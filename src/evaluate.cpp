@@ -105,9 +105,14 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
             const float c   = std::min(800, complexity) / 800.0f;   // [0..1]
             const float c01 = c * (3.0f - 2.0f * c);                 // smoothstep
 
+            // endgame quench: scale by game phase (based on non-pawn material)
+            const int   npm    = pos.non_pawn_material(WHITE) + pos.non_pawn_material(BLACK);
+            const float phase  = std::min(1.0f, npm / 6200.0f);      // ~initial NPM ≈ 6200 cp
+            const float quench = phase * phase;                      // stronger damping in EG
+
             // cap the fraction of the raw gain (more conservative)
             const float alpha_max = 0.10f;
-            const float d_now     = alpha_max * (wPos * cg * c01 / 100.0f);
+            const float d_now     = quench * alpha_max * (wPos * cg * c01 / 100.0f);
 
             // EMA smoothing (lambda = 0.45), per-thread
             static thread_local float s_dyn_prev_eval = 0.0f;

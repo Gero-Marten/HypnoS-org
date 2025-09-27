@@ -245,7 +245,10 @@ void Search::Worker::start_searching() {
 
             // Alpha: max fraction of the raw complexity boost (more conservative)
             const float alpha_max = 0.10f;
-            const float d_now     = alpha_max * (wPos * cg * c01 / 100.0f);
+            // Use root phase 't' for endgame quench in log (no Position needed)
+            const float phase  = std::clamp((float)t, 0.0f, 1.0f);
+            const float quench = phase * phase;
+            const float d_now  = quench * alpha_max * (wPos * cg * c01 / 100.0f);
 
             // EMA smoothing (lambda = 0.45)
             const float d_sm = (1.0f - 0.45f) * g_dyn_prev + 0.45f * d_now;
