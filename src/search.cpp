@@ -248,7 +248,7 @@ void Search::Worker::start_searching() {
             // Use root phase 't' for endgame quench in log (no Position needed)
             const float phase  = std::clamp((float)t, 0.0f, 1.0f);
             const float quench = phase * phase;
-            const float d_now  = quench * alpha_max * (wPos * cg * c01 / 100.0f);
+            const float d_now  = DynGate::strength * quench * alpha_max * (wPos * cg * c01 / 100.0f);
 
             // EMA smoothing (lambda = 0.45)
             const float d_sm = (1.0f - 0.45f) * g_dyn_prev + 0.45f * d_now;
@@ -599,6 +599,14 @@ void Search::Worker::iterative_deepening() {
     {
         // Reset dynamic EMA at the start of each root iteration
         g_dyn_prev = 0.0f;
+
+        // Dynamic strength ramp per iteration: 0 at shallow depths, 1 at deep
+        const int   rampStart = 8;   // begin enabling around depth 8
+        const int   rampFull  = 18;  // fully enabled by depth 18
+        const float s = (rootDepth <= rampStart) ? 0.0f
+                       : (rootDepth >= rampFull)  ? 1.0f
+                       : float(rootDepth - rampStart) / float(rampFull - rampStart);
+        DynGate::strength = s;
 
         // Age out PV variability metric
         if (mainThread)

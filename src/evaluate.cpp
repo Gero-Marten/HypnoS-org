@@ -112,7 +112,7 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
 
             // cap the fraction of the raw gain (more conservative)
             const float alpha_max = 0.10f;
-            const float d_now     = quench * alpha_max * (wPos * cg * c01 / 100.0f);
+            const float d_now     = DynGate::strength * quench * alpha_max * (wPos * cg * c01 / 100.0f);
 
             // EMA smoothing (lambda = 0.45), per-thread
             static thread_local float s_dyn_prev_eval = 0.0f;
