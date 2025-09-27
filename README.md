@@ -35,7 +35,6 @@ It leverages distributed computing, allowing anyone to contribute CPU time to su
 
   #### UCI options
   
-
 ### Book1
 
 Default: False  
@@ -197,6 +196,12 @@ Interaction: if NNUE ManualWeights = true, Dynamic is bypassed (Manual has prior
 
 Note: the Dyn Open/Endgame … options below define the profiles used by Dynamic.
 
+  ### (Debug) NNUE Log Weights
+
+Type: Boolean — Default: false
+
+Description: prints one line per search at root: wMat/wPos, phase t, small/big net, scaled threshold.
+
   ### NNUE ManualWeights
 
 Type: Boolean — Default: false
@@ -220,38 +225,3 @@ Type: Integer (-12..12) — Default: 0
 
 Description: delta over 131 (Manual mode only).
 
-  ### Dyn Open Mat
-
-Type: Integer (50..200) — Default: 115
-
-Description: opening profile for material weight (Dynamic).
-
-  ### Dyn Open Pos
-
-Type: Integer (50..200) — Default: 145
-
-Description: opening profile for positional weight (Dynamic).
-
-  ### Dyn Endgame Mat
-
-Type: Integer (50..200) — Default: 145
-
-Description: endgame profile for material weight (Dynamic).
-
-  ### Dyn Endgame Pos
-
-Type: Integer (50..200) — Default: 115
-
-Description: endgame profile for positional weight (Dynamic).
-
-  ### Dyn Complexity Gain (%)
-
-Type: Integer (0..50) — Default: 12
-
-Description: small percentage boost on wPos when the NNUE components disagree (large |psqt - positional|).
-
-  ### (Debug) NNUE Log Weights
-
-Type: Boolean — Default: false
-
-Description: prints one line per search at root: wMat/wPos, phase t, small/big net, scaled threshold.
