@@ -306,6 +306,88 @@ void UCIEngine::loop() {
                 Experience::merge((int)cargs.size(), cargs.data());
             }
         }
+        else if (token == "import_cpgn")
+        {
+            ensure_exp_initialized(engine);
+            Experience::wait_for_loading_finished();
+
+            // Syntax: import_cpgn <source.cpgn>
+            std::vector<std::string> args;
+            for (std::string a; is >> std::skipws >> a; )
+                args.emplace_back(std::move(a));
+
+            if (args.empty()) {
+                sync_cout << "info string Syntax: import_cpgn <source.cpgn>" << sync_endl;
+            } else {
+                // Destination is the current Options["Experience File"]
+                std::vector<char*> cargs;
+                cargs.reserve(args.size());
+                for (auto& s : args)
+                    cargs.push_back(const_cast<char*>(s.c_str()));
+                Experience::import_cpgn((int)cargs.size(), cargs.data());
+            }
+        }
+        else if (token == "import_pgn")
+        {
+            ensure_exp_initialized(engine);
+            Experience::wait_for_loading_finished();
+
+            // Syntax: import_pgn <source.pgn>
+            std::vector<std::string> args;
+            for (std::string a; is >> std::skipws >> a; )
+                args.emplace_back(std::move(a));
+
+            if (args.empty()) {
+                sync_cout << "info string Syntax: import_pgn <source.pgn>" << sync_endl;
+            } else {
+                // Destination is the current Options["Experience File"]
+                std::vector<char*> cargs;
+                cargs.reserve(args.size());
+                for (auto& s : args)
+                    cargs.push_back(const_cast<char*>(s.c_str()));
+                Experience::import_pgn((int)cargs.size(), cargs.data());
+            }
+        }
+        else if (token == "cpgn_to_exp")
+        {
+            ensure_exp_initialized(engine);
+            Experience::wait_for_loading_finished();
+
+            // Syntax: cpgn_to_exp <source.cpgn> <dest.exp>
+            std::vector<std::string> args;
+            for (std::string a; is >> std::skipws >> a; )
+                args.emplace_back(std::move(a));
+
+            if (args.size() < 2) {
+                sync_cout << "info string Syntax: cpgn_to_exp <source.cpgn> <dest.exp>" << sync_endl;
+            } else {
+                std::vector<char*> cargs;
+                cargs.reserve(args.size());
+                for (auto& s : args)
+                    cargs.push_back(const_cast<char*>(s.c_str()));
+                Experience::cpgn_to_exp((int)cargs.size(), cargs.data());
+            }
+        }
+        else if (token == "pgn_to_exp")
+        {
+            ensure_exp_initialized(engine);
+            Experience::wait_for_loading_finished();
+
+            // Syntax: pgn_to_exp <source.pgn> <dest.exp>
+            std::vector<std::string> args;
+            for (std::string a; is >> std::skipws >> a; )
+                args.emplace_back(std::move(a));
+
+            if (args.size() < 2) {
+                sync_cout << "info string Syntax: pgn_to_exp <source.pgn> <dest.exp>" << sync_endl;
+            } else {
+                std::vector<char*> cargs;
+                cargs.reserve(args.size());
+                for (auto& s : args)
+                    cargs.push_back(const_cast<char*>(s.c_str()));
+                Experience::pgn_to_exp((int)cargs.size(), cargs.data());
+            }
+        }
 #endif
         else if (!token.empty() && token[0] != '#') {
             sync_cout << "Unknown command: '" << cmd
