@@ -17,6 +17,7 @@
 */
 
 #include "search.h"
+#include "dyn_gate.h"
 
 #include <algorithm>
 #include <array>
@@ -57,6 +58,9 @@
 #include "ucioption.h"
 
 namespace Hypnos {
+
+// Dynamic weights EMA state (per-thread, reset at each root iteration)
+thread_local float g_dyn_prev = 0.0f;
 
 namespace TB = Tablebases;
 
@@ -229,10 +233,33 @@ void Search::Worker::start_searching() {
             wMat = (eM * (1024 - t) + oM * t) / 1024;
             wPos = (eP * (1024 - t) + oP * t) / 1024;
 
-            // Complexity boost (same as evaluate())
+            // Complexity boost (smoothed & clamped)
+            // EMA state: g_dyn_prev (thread_local), declared at file top
+
             const int complexity = std::abs(psqt - positional);
             const int cg         = Hypnos::Eval::gEvalWeights.dynComplexityGain.load(); // percent
-            wPos += (wPos * cg * std::min(800, complexity) / 800) / 100;
+
+            // Normalize complexity to [0,1] and squash it (smoothstep)
+            const float c   = std::min(800, complexity) / 800.0f;      // [0..1]
+            const float c01 = c * (3.0f - 2.0f * c);                    // smoothstep
+
+            // Alpha: max fraction of the raw complexity boost (more conservative)
+            const float alpha_max = 0.10f;
+            // Use root phase 't' for endgame quench in log (no Position needed)
+            const float phase  = std::clamp((float)t, 0.0f, 1.0f);
+            const float quench = phase * phase;
+            const float d_now  = quench * alpha_max * (wPos * cg * c01 / 100.0f);
+
+            // EMA smoothing (lambda = 0.45)
+            const float d_sm = (1.0f - 0.45f) * g_dyn_prev + 0.45f * d_now;
+            g_dyn_prev       = d_sm;
+
+            // Clamp in weight domain (int16-like)
+            int delta_i = (int)((d_sm >= 0.0f) ? (d_sm + 0.5f) : (d_sm - 0.5f));
+            if (delta_i >  4) delta_i =  4;
+            if (delta_i < -4) delta_i = -4;
+
+            wPos += delta_i;
             break;
         }
         case WeightsMode::Default:
@@ -240,11 +267,11 @@ void Search::Worker::start_searching() {
             break;
         }
 
-        // 3) Clamp come in evaluate()
+        // 3) Clamp as in evaluate()
         wMat = std::min(200, std::max(50, wMat));
         wPos = std::min(200, std::max(50, wPos));
 
-        // 4) Soglia small->big scalata (baseline 125+131)
+        // 4) Small->big threshold scaled (baseline 125+131)
         const int baseThreshold   = 236;
         const int scaledThreshold = baseThreshold * (wMat + wPos) / (125 + 131);
 
@@ -570,6 +597,9 @@ void Search::Worker::iterative_deepening() {
     while (++rootDepth < MAX_PLY && !threads.stop
            && !(limits.depth && mainThread && rootDepth > limits.depth))
     {
+        // Reset dynamic EMA at the start of each root iteration
+        g_dyn_prev = 0.0f;
+
         // Age out PV variability metric
         if (mainThread)
             totBestMoveChanges /= 2;
@@ -857,6 +887,12 @@ Value Search::Worker::search(
     constexpr bool rootNode = nodeType == Root;
     const bool     allNode  = !(PvNode || cutNode);
 
+    // Dynamic weights: OFF in cut nodes and shallow PV nodes
+    if (cutNode || (PvNode && depth < 12))
+        DynGate::enabled = false;
+    else
+        DynGate::enabled = true;
+
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)
     {
@@ -897,6 +933,9 @@ Value Search::Worker::search(
 
     // Step 1. Initialize node
     ss->inCheck   = pos.checkers();
+    // Dynamic weights: OFF when in check
+    if (ss->inCheck)
+        DynGate::enabled = false;
     priorCapture  = pos.captured_piece();
     Color us      = pos.side_to_move();
     ss->moveCount = 0;
@@ -1881,6 +1920,8 @@ moves_loop:  // When in check, search starts here
 // and https://www.chessprogramming.org/Quiescence_Search
 template<NodeType nodeType>
 Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta) {
+    // Dynamic weights: OFF in quiescence nodes
+    DynGate::enabled = false;
 
     static_assert(nodeType != Root);
     constexpr bool PvNode = nodeType == PV;
@@ -1914,6 +1955,9 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
     bestMove    = Move::none();
     ss->inCheck = pos.checkers();
+    // Dynamic weights: OFF when in check
+    if (ss->inCheck)
+        DynGate::enabled = false;
     moveCount   = 0;
 
     // Used to send selDepth info to GUI (selDepth counts from 1, ply from 0)

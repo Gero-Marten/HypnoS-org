@@ -35,6 +35,7 @@
 #include "uci.h"
 #include "nnue/nnue_accumulator.h"
 #include "eval_weights.h"
+#include "dyn_gate.h"
 
 namespace Hypnos {
 
@@ -96,11 +97,37 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
         wMat = (eM * (1024 - t) + oM * t) / 1024;
         wPos = (eP * (1024 - t) + oP * t) / 1024;
 
-        // Light positional boost when NNUE components disagree (proxy for complexity)
+        // Dynamic complexity boost (gated, smoothed, clamped)
         const int complexity = std::abs(psqt - positional);
         const int cg         = Hypnos::Eval::gEvalWeights.dynComplexityGain.load(); // percent
-        wPos += (wPos * cg * std::min(800, complexity) / 800) / 100;
+        if (DynGate::enabled) {
+            // normalize complexity to [0,1] and squash it (smoothstep)
+            const float c   = std::min(800, complexity) / 800.0f;   // [0..1]
+            const float c01 = c * (3.0f - 2.0f * c);                 // smoothstep
+
+            // endgame quench: scale by game phase (based on non-pawn material)
+            const int   npm    = pos.non_pawn_material(WHITE) + pos.non_pawn_material(BLACK);
+            const float phase  = std::min(1.0f, npm / 6200.0f);      // ~initial NPM ≈ 6200 cp
+            const float quench = phase * phase;                      // stronger damping in EG
+
+            // cap the fraction of the raw gain (more conservative)
+            const float alpha_max = 0.10f;
+            const float d_now     = quench * alpha_max * (wPos * cg * c01 / 100.0f);
+
+            // EMA smoothing (lambda = 0.45), per-thread
+            static thread_local float s_dyn_prev_eval = 0.0f;
+            const float d_sm = (1.0f - 0.45f) * s_dyn_prev_eval + 0.45f * d_now;
+            s_dyn_prev_eval  = d_sm;
+
+            // clamp to small integer step in weight domain
+            int delta_i = (int)((d_sm >= 0.0f) ? (d_sm + 0.5f) : (d_sm - 0.5f));
+            if (delta_i >  4) delta_i =  4;
+            if (delta_i < -4) delta_i = -4;
+
+            wPos += delta_i;
+        }
         break;
+
     }
     case Hypnos::Eval::WeightsMode::Default:
     default:
