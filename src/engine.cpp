@@ -147,12 +147,6 @@ Engine::Engine(std::optional<std::string> path) :
 
     options.add("UCI_ShowWDL", Option(false));
 
-    // Debug: print NNUE weights once per search at root (main thread)
-    options.add("NNUE Log Weights", Option(false));
-
-    // NNUE dynamic profile knobs removed: internal values are used instead
-    // (Open 126/134, End 134/126, Complexity Gain = 10)
-
     options.add(  //
       "SyzygyPath", Option("", [](const Option& o) {
           Tablebases::init(o);
@@ -287,6 +281,9 @@ Engine::Engine(std::optional<std::string> path) :
                               << (opt ? "enabled (mode=Dynamic)" : "disabled (mode=Default)") << sync_endl;
                     return std::nullopt;
                 }));
+
+    // Debug: print NNUE weights once per search at root (main thread)
+    options.add("NNUE Log Weights", Option(false));
 
     options.add("NNUE ManualWeights",
                 Option(false, [](const Option& opt) {
