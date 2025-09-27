@@ -237,7 +237,7 @@ void Search::Worker::start_searching() {
             // EMA state: g_dyn_prev (thread_local), declared at file top
 
             const int complexity = std::abs(psqt - positional);
-            const int cg         = Hypnos::Eval::gEvalWeights.dynComplexityGain.load(); // percent
+            const int cg         = 10; // internal constant (UCI ignored)
 
             // Normalize complexity to [0,1] and squash it (smoothstep)
             const float c   = std::min(800, complexity) / 800.0f;      // [0..1]

@@ -150,66 +150,8 @@ Engine::Engine(std::optional<std::string> path) :
     // Debug: print NNUE weights once per search at root (main thread)
     options.add("NNUE Log Weights", Option(false));
 
-    // --- NNUE dynamic profile knobs (active when mode = Dynamic) -----------
-    options.add("Dyn Open Mat",
-                Option(126, 50, 200,
-                       [](const Option& o) -> std::optional<std::string> {
-                           Hypnos::Eval::set_dynamic_profiles(
-                               int(o),
-                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
-                           return std::make_optional(std::string("info string Dyn Open Mat = ") + std::to_string(int(o)));
-                       }));
-
-    options.add("Dyn Open Pos",
-                Option(134, 50, 200,
-                       [](const Option& o) -> std::optional<std::string> {
-                           Hypnos::Eval::set_dynamic_profiles(
-                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
-                               int(o),
-                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
-                           return std::make_optional(std::string("info string Dyn Open Pos = ") + std::to_string(int(o)));
-                       }));
-
-    options.add("Dyn Endgame Mat",
-                Option(134, 50, 200,
-                       [](const Option& o) -> std::optional<std::string> {
-                           Hypnos::Eval::set_dynamic_profiles(
-                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
-                               int(o),
-                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
-                           return std::make_optional(std::string("info string Dyn Endgame Mat = ") + std::to_string(int(o)));
-                       }));
-
-    options.add("Dyn Endgame Pos",
-                Option(126, 50, 200,
-                       [](const Option& o) -> std::optional<std::string> {
-                           Hypnos::Eval::set_dynamic_profiles(
-                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
-                               int(o),
-                               Hypnos::Eval::gEvalWeights.dynComplexityGain.load());
-                           return std::make_optional(std::string("info string Dyn Endgame Pos = ") + std::to_string(int(o)));
-                       }));
-
-    options.add("Dyn Complexity Gain (%)",
-                Option(10, 0, 50,
-                       [](const Option& o) -> std::optional<std::string> {
-                           Hypnos::Eval::set_dynamic_profiles(
-                               Hypnos::Eval::gEvalWeights.dynOpenMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynOpenPos.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgMat.load(),
-                               Hypnos::Eval::gEvalWeights.dynEgPos.load(),
-                               int(o));
-                           return std::make_optional(std::string("info string Dyn Complexity Gain (%) = ") + std::to_string(int(o)));
-                       }));
+    // NNUE dynamic profile knobs removed: internal values are used instead
+    // (Open 126/134, End 134/126, Complexity Gain = 10)
 
     options.add(  //
       "SyzygyPath", Option("", [](const Option& o) {

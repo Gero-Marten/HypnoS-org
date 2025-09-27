@@ -27,6 +27,7 @@
 #include <memory>
 #include <sstream>
 #include <tuple>
+#include <cmath>
 
 #include "nnue/network.h"
 #include "nnue/nnue_misc.h"
@@ -97,9 +98,29 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
         wMat = (eM * (1024 - t) + oM * t) / 1024;
         wPos = (eP * (1024 - t) + oP * t) / 1024;
 
+        // Internal base weights (UCI ignored): Open 126/134, End 134/126
+        {
+            // Game-phase estimate (Stockfish style): minors + 2*rooks + 4*queens
+            int gp = 0;
+            gp += pos.count<KNIGHT>() + pos.count<BISHOP>(); // minor pieces
+            gp += 2 * pos.count<ROOK>();
+            gp += 4 * pos.count<QUEEN>();
+            if (gp < 0)  gp = 0;
+            if (gp > 24) gp = 24;
+            const int t1024 = (gp * 1024) / 24; // 0..1024
+
+            const int openMat = 126, openPos = 134;
+            const int endMat  = 134, endPos  = 126;
+
+            // Linear interpolation in 0..1024 space
+            wMat = (endMat * (1024 - t1024) + openMat * t1024) / 1024;
+            wPos = (endPos * (1024 - t1024) + openPos * t1024) / 1024;
+        }
+
         // Dynamic complexity boost (gated, smoothed, clamped)
         const int complexity = std::abs(psqt - positional);
-        const int cg         = Hypnos::Eval::gEvalWeights.dynComplexityGain.load(); // percent
+        const int cg         = 10; // internal constant (UCI ignored)
+
         if (DynGate::enabled) {
             // normalize complexity to [0,1] and squash it (smoothstep)
             const float c   = std::min(800, complexity) / 800.0f;   // [0..1]
