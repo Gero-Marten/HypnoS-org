@@ -687,7 +687,7 @@ FORCE: ;
 
 ### 3.4 Bits
 ifeq ($(bits),64)
-	CXXFLAGS += -DIS_64BIT
+CXXFLAGS += -DIS_64BIT
 endif
 
 ### 3.5 prefetch and popcount
