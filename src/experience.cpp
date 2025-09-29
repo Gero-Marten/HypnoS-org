@@ -33,6 +33,7 @@
 #include "experience.h"
 #include "uci.h"
 #include "experience_compat.h"
+#include "ucioption.h"  // Options["Experience File"]
 
 using namespace Hypnos;
 
@@ -1676,3 +1677,62 @@ void add_multipv_experience(const Key k, const Move m, const Value v, const Dept
     currentExperience->add_multipv_experience(k, m, v, d);
 }
 }
+// ===== Local helpers for the wrappers =====
+
+namespace {
+inline void info_line(const std::string& s) { sync_cout << "info string " << s << sync_endl; }
+
+// No try/catch: -fno-exceptions
+inline std::string current_exp_target() {
+    return std::string(Options["Experience File"]);
+}
+} // anon
+
+namespace Experience {
+
+// import_cpgn <src.cpgn>  --> dest = Options["Experience File"]
+void import_cpgn(int argc, char* argv[]) {
+    wait_for_loading_finished();
+    if (argc < 1 || !argv || !argv[0]) { info_line("Syntax: import_cpgn <source.cpgn>"); return; }
+
+    const std::string src = Utility::unquote(argv[0]);
+    const std::string dst = current_exp_target();
+    if (dst.empty()) { info_line("No Experience File set. Use: setoption name Experience File value <dest.exp>"); return; }
+
+    std::vector<std::string> hold{ src, dst };
+    std::vector<char*> args; args.reserve(hold.size());
+    for (auto& s : hold) args.push_back(const_cast<char*>(s.c_str()));
+
+    // Reuse the existing CPGN -> EXP converter
+    convert_compact_pgn((int)args.size(), args.data());
+}
+
+// cpgn_to_exp <src.cpgn> <dest.exp>
+void cpgn_to_exp(int argc, char* argv[]) {
+    wait_for_loading_finished();
+    if (argc < 2 || !argv || !argv[0] || !argv[1]) { info_line("Syntax: cpgn_to_exp <source.cpgn> <dest.exp>"); return; }
+
+    const std::string src = Utility::unquote(argv[0]);
+    const std::string dst = Utility::unquote(argv[1]);
+
+    std::vector<std::string> hold{ src, dst };
+    std::vector<char*> args; args.reserve(hold.size());
+    for (auto& s : hold) args.push_back(const_cast<char*>(s.c_str()));
+
+    convert_compact_pgn((int)args.size(), args.data());
+}
+
+void import_pgn(int argc, char* argv[]) {
+    wait_for_loading_finished();
+    if (argc < 1 || !argv || !argv[0]) { info_line("Syntax: import_pgn <source.pgn>"); return; }
+    info_line("import_pgn not supported in this build. Convert PGN -> CPGN upstream, then use import_cpgn.");
+}
+
+void pgn_to_exp(int argc, char* argv[]) {
+    (void)argv; 
+    wait_for_loading_finished();
+    if (argc < 2) { info_line("Syntax: pgn_to_exp <source.pgn> <dest.exp>"); return; }
+    info_line("pgn_to_exp not supported in this build. Convert PGN -> CPGN upstream, then use cpgn_to_exp.");
+}
+
+} // namespace Experience
