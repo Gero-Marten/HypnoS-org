@@ -681,6 +681,10 @@ ifeq ($(optimize),yes)
 	endif
 endif
 
+.PHONY: FORCE
+misc.o: FORCE
+FORCE: ;
+
 ### 3.4 Bits
 ifeq ($(bits),64)
 	CXXFLAGS += -DIS_64BIT
@@ -829,10 +833,11 @@ ifneq ($(GIT_SHA), )
 endif
 
 ### 3.8.2 Try to include git commit date for versioning
-GIT_DATE := $(shell git show -s --date=format:'%Y%m%d' --format=%cd HEAD 2>/dev/null)
-ifneq ($(GIT_DATE), )
-	CXXFLAGS += -DGIT_DATE=$(GIT_DATE)
-endif
+# (removed – engine_version_info now uses __DATE__)
+# GIT_DATE := $(shell git show -s --date=format:'%Y%m%d' --format=%cd HEAD 2>/dev/null)
+# ifneq ($(GIT_DATE), )
+#     CXXFLAGS += -DGIT_DATE=$(GIT_DATE)
+# endif
 
 ### 3.8.3 Try to include architecture
 ifneq ($(ARCH), )
