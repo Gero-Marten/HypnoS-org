@@ -1470,8 +1470,6 @@ moves_loop:  // When in check, search starts here
         movedPiece = pos.moved_piece(move);
         givesCheck = pos.gives_check(move);
 
-        (ss + 1)->quietMoveStreak = capture ? 0 : (ss->quietMoveStreak + 1);
-
         // Calculate new depth for this move
         newDepth = depth - 1;
 
@@ -1633,7 +1631,7 @@ moves_loop:  // When in check, search starts here
 
         // These reduction adjustments have no proven non-linear scaling
 
-        r += 543;  // Base reduction offset to compensate for other tweaks
+        r += 843;  // Base reduction offset to compensate for other tweaks
         r -= moveCount * 66;
         r -= std::abs(correctionValue) / 30450;
 
@@ -1648,8 +1646,6 @@ moves_loop:  // When in check, search starts here
         // Increase reduction if next ply has a lot of fail high
         if ((ss + 1)->cutoffCnt > 2)
             r += 1051 + allNode * 814;
-
-        r += (ss + 1)->quietMoveStreak * 50;
 
         // For first picked move (ttMove) reduce reduction
         if (move == ttData.move)
