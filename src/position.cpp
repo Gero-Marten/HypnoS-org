@@ -53,12 +53,10 @@ Key side, noPawns;
 namespace {
 
 constexpr std::string_view PieceToChar(" PNBRQK  pnbrqk");
-static constexpr Piece Pieces[] = {
-    W_PAWN, W_KNIGHT, W_BISHOP, W_ROOK, W_QUEEN, W_KING,
-    B_PAWN, B_KNIGHT, B_BISHOP, B_ROOK, B_QUEEN, B_KING
-};
 
-} // namespace
+static constexpr Piece Pieces[] = {W_PAWN, W_KNIGHT, W_BISHOP, W_ROOK, W_QUEEN, W_KING,
+                                   B_PAWN, B_KNIGHT, B_BISHOP, B_ROOK, B_QUEEN, B_KING};
+}  // namespace
 
 // --- HypnoS Experience integration: fixed Zobrist keys ---
 #ifdef HYP_FIXED_ZOBRIST
@@ -86,7 +84,7 @@ std::ostream& operator<<(std::ostream& os, const Position& pos) {
     for (Bitboard b = pos.checkers(); b;)
         os << UCIEngine::square(pop_lsb(b)) << " ";
 
-    if (Tablebases::MaxCardinality >= popcount(pos.pieces()) && !pos.can_castle(ANY_CASTLING))
+    if (int(Tablebases::MaxCardinality) >= popcount(pos.pieces()) && !pos.can_castle(ANY_CASTLING))
     {
         StateInfo st;
 
@@ -1213,7 +1211,7 @@ bool Position::see_ge(Move m, int threshold) const {
 // or by repetition. It does not detect stalemates.
 bool Position::is_draw(int ply) const {
 
-    if (st->rule50 > 99 && (!checkers() || MoveList<LEGAL>(*this).size()))
+    if (st->rule50 > 99 + bool(checkers()))
         return true;
 
     return is_repetition(ply);
@@ -1239,6 +1237,41 @@ bool Position::has_repeated() const {
     return false;
 }
 
+bool Position::king_danger(Color c) const {
+
+    Square ksq = square<KING>(c);
+    Bitboard kingRing, kingAttackers, legalKing;
+
+    kingRing = kingAttackers = legalKing = 0;
+
+    kingRing = attacks_bb<KING>(ksq);
+
+    while (kingRing)
+    {
+      Square to = pop_lsb(kingRing);
+      Bitboard enemyAttackers = pieces(~c) & attackers_to(to);
+      if (!enemyAttackers)
+      {
+          if ((pieces(c) & to) == 0)
+              legalKing |= to;
+      }
+
+      while (enemyAttackers)
+      {
+        Square currentEnemy = pop_lsb(enemyAttackers);
+        if ((currentEnemy & ~kingRing) || (more_than_one(attackers_to(to) & pieces(~c))))
+            kingAttackers |= currentEnemy;
+      }
+    }
+    int kingAttackersCount = popcount(kingAttackers);
+    int legalKingCount = popcount(legalKing);
+
+    if (   (kingAttackersCount > 1 &&  legalKingCount < 2)
+        || (kingAttackersCount > 0 && !legalKingCount))
+        return true;
+
+    return false;
+}
 
 // Tests if the position has a move which draws by repetition.
 // This function accurately matches the outcome of is_draw() over all legal moves.

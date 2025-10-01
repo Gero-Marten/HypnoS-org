@@ -123,7 +123,7 @@ class Logger {
 // Output: "HypnoS ddMMyyyy" (no dev, no SHA)
 std::string engine_version_info() {
     std::ostringstream ss;
-    ss << "HypnoS ";
+    ss << "HypnoS Iccf ";
 
     // Fallback: __DATE__ like "Sep 28 2025" -> "28092025"
     std::istringstream date(__DATE__);

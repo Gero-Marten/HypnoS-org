@@ -1408,7 +1408,7 @@ void convert_compact_pgn(const int argc, char* argv[]) {
 
                 //////////////////////////////////////////////////////////////////
                 // Guess game result and apply sanity checks (we can't trust PGN scores blindly)
-                if (std::abs(score) >= VALUE_TB_WIN_IN_MAX_PLY)
+                if (std::abs(score) >= VALUE_TB_WIN)
                 {
                     const Color winnerColorBasedOnThisMove =
                       score > 0 ? gameData.pos.side_to_move() : ~gameData.pos.side_to_move();

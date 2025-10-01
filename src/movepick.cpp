@@ -201,7 +201,7 @@ template<typename Pred>
 Move MovePicker::select(Pred filter) {
 
     for (; cur < endCur; ++cur)
-        if (*cur != ttMove && filter())
+        if (*cur != ttMove && filter() && pos.legal(*cur))
             return *cur++;
 
     return Move::none();

@@ -114,7 +114,7 @@ using Key      = uint64_t;
 using Bitboard = uint64_t;
 
 constexpr int MAX_MOVES = 256;
-constexpr int MAX_PLY   = 246;
+constexpr int MAX_PLY   = 420;
 
 enum Color : int8_t {
     WHITE,
@@ -159,21 +159,20 @@ constexpr Value VALUE_MATE             = 32000;
 constexpr Value VALUE_MATE_IN_MAX_PLY  = VALUE_MATE - MAX_PLY;
 constexpr Value VALUE_MATED_IN_MAX_PLY = -VALUE_MATE_IN_MAX_PLY;
 
-constexpr Value VALUE_TB                 = VALUE_MATE_IN_MAX_PLY - 1;
-constexpr Value VALUE_TB_WIN_IN_MAX_PLY  = VALUE_TB - MAX_PLY;
-constexpr Value VALUE_TB_LOSS_IN_MAX_PLY = -VALUE_TB_WIN_IN_MAX_PLY;
-
+constexpr Value tbConversionFactor = VALUE_MATE_IN_MAX_PLY / 100;
+constexpr Value VALUE_TB_WIN         = 101 * tbConversionFactor;
+constexpr Value VALUE_MAX_EVAL       = VALUE_TB_WIN - 17 * tbConversionFactor;
 
 constexpr bool is_valid(Value value) { return value != VALUE_NONE; }
 
 constexpr bool is_win(Value value) {
     assert(is_valid(value));
-    return value >= VALUE_TB_WIN_IN_MAX_PLY;
+    return value > VALUE_MAX_EVAL;
 }
 
 constexpr bool is_loss(Value value) {
     assert(is_valid(value));
-    return value <= VALUE_TB_LOSS_IN_MAX_PLY;
+    return value < -VALUE_MAX_EVAL;
 }
 
 constexpr bool is_decisive(Value value) { return is_win(value) || is_loss(value); }

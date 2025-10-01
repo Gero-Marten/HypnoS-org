@@ -103,9 +103,10 @@ class Position {
     Square square(Color c) const;
 
     // Castling
-    bool   can_castle(CastlingRights cr) const;
-    bool   castling_impeded(CastlingRights cr) const;
-    Square castling_rook_square(CastlingRights cr) const;
+    CastlingRights castling_rights(Color c) const;
+    bool           can_castle(CastlingRights cr) const;
+    bool           castling_impeded(CastlingRights cr) const;
+    Square         castling_rook_square(CastlingRights cr) const;
 
     // Checking
     Bitboard checkers() const;
@@ -155,6 +156,7 @@ class Position {
     bool  is_repetition(int ply) const;
     bool  upcoming_repetition(int ply) const;
     bool  has_repeated() const;
+    bool  king_danger(Color c) const;
     int   rule50_count() const;
     Value non_pawn_material(Color c) const;
     Value non_pawn_material() const;
@@ -183,7 +185,6 @@ class Position {
                      Square&           rfrom,
                      Square&           rto,
                      DirtyPiece* const dp = nullptr);
-    Key  adjust_key50(Key k) const;
 
     // Data members
     Piece      board[SQUARE_NB];
@@ -246,6 +247,10 @@ inline Square Position::ep_square() const { return st->epSquare; }
 
 inline bool Position::can_castle(CastlingRights cr) const { return st->castlingRights & cr; }
 
+inline CastlingRights Position::castling_rights(Color c) const {
+    return c & CastlingRights(st->castlingRights);
+}
+
 inline bool Position::castling_impeded(CastlingRights cr) const {
     assert(cr == WHITE_OO || cr == WHITE_OOO || cr == BLACK_OO || cr == BLACK_OOO);
     return pieces() & castlingPath[cr];
@@ -282,10 +287,8 @@ inline Bitboard Position::pinners(Color c) const { return st->pinners[c]; }
 
 inline Bitboard Position::check_squares(PieceType pt) const { return st->checkSquares[pt]; }
 
-inline Key Position::key() const { return adjust_key50(st->key); }
-
-inline Key Position::adjust_key50(Key k) const {
-    return st->rule50 < 14 ? k : k ^ make_key((st->rule50 - 14) / 8);
+inline Key Position::key() const {
+  return st->rule50 < 101 ? st->key ^ make_key((st->rule50 - 1) / 8) : st->key ^ make_key(101);
 }
 
 inline Key Position::pawn_key() const { return st->pawnKey; }

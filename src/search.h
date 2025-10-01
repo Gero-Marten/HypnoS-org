@@ -61,21 +61,22 @@ namespace Search {
 // shallower and deeper in the tree during the search. Each search thread has
 // its own array of Stack objects, indexed by the current ply.
 struct Stack {
-    Move*                       pv;
-    PieceToHistory*             continuationHistory;
+    Move*           pv;
+    PieceToHistory* continuationHistory;
     CorrectionHistory<PieceTo>* continuationCorrectionHistory;
-    int                         ply;
-    Move                        currentMove;
-    Move                        excludedMove;
-    Value                       staticEval;
-    int                         statScore;
-    int                         moveCount;
-    bool                        inCheck;
-    bool                        ttPv;
-    bool                        ttHit;
-    int                         cutoffCnt;
-    int                         reduction;
-    int                         quietMoveStreak;
+    uint16_t        ply;
+    Move            currentMove;
+    Move            excludedMove;
+    Value           staticEval;
+    int             statScore;
+    uint8_t         moveCount;
+    bool            inCheck;
+    bool            ttPv;
+    bool            ttHit;
+    bool            secondaryLine;
+    bool            mainLine;
+    uint16_t        cutoffCnt;
+    int             quietMoveStreak;
 };
 
 
@@ -97,7 +98,6 @@ struct RootMove {
     Value             score            = -VALUE_INFINITE;
     Value             previousScore    = -VALUE_INFINITE;
     Value             averageScore     = -VALUE_INFINITE;
-    Value             meanSquaredScore = -VALUE_INFINITE * VALUE_INFINITE;
     Value             uciScore         = -VALUE_INFINITE;
     bool              scoreLowerbound  = false;
     bool              scoreUpperbound  = false;
@@ -183,33 +183,6 @@ struct InfoIteration {
     size_t           currmovenumber;
 };
 
-// Skill structure is used to implement strength limit. If we have a UCI_Elo,
-// we convert it to an appropriate skill level, anchored to the Stash engine.
-// This method is based on a fit of the Elo results for games played between
-// Hypnos at various skill levels and various versions of the Stash engine.
-// Skill 0 .. 19 now covers CCRL Blitz Elo from 1320 to 3190, approximately
-// Reference: https://github.com/vondele/Stockfish/commit/a08b8d4e9711c2
-struct Skill {
-    // Lowest and highest Elo ratings used in the skill level calculation
-    constexpr static int LowestElo  = 1320;
-    constexpr static int HighestElo = 3190;
-
-    Skill(int skill_level, int uci_elo) {
-        if (uci_elo)
-        {
-            double e = double(uci_elo - LowestElo) / (HighestElo - LowestElo);
-            level = std::clamp((((37.2473 * e - 40.8525) * e + 22.2943) * e - 0.311438), 0.0, 19.0);
-        }
-        else
-            level = double(skill_level);
-    }
-    bool enabled() const { return level < 20.0; }
-    bool time_to_pick(Depth depth) const { return depth == 1 + int(level); }
-    Move pick_best(const RootMoves&, size_t multiPV);
-
-    double level;
-    Move   best = Move::none();
-};
 
 // SearchManager manages the search from the main thread. It is responsible for
 // keeping track of the time, and storing data strictly related to the main thread.
@@ -329,15 +302,15 @@ class Worker {
 
     size_t                pvIdx, pvLast;
     std::atomic<uint64_t> nodes, tbHits, bestMoveChanges;
-    int                   selDepth, nmpMinPly;
-
-    Value optimism[COLOR_NB];
+    int                   selDepth, contempt[2];
+    bool                  nmpGuard, nmpGuardV, nmpSide;
 
     Position  rootPos;
     StateInfo rootState;
     RootMoves rootMoves;
     Depth     rootDepth, completedDepth;
     Value     rootDelta;
+    Value     pvValue;
 
     size_t                    threadIdx;
     NumaReplicatedAccessToken numaAccessToken;
@@ -353,7 +326,7 @@ class Worker {
     // ------------------------------------------------------------------------
 
     // Reductions lookup table initialized at startup
-    std::array<int, MAX_MOVES> reductions;  // [depth or moveNumber]
+    std::array<int, MAX_PLY> reductions;  // [depth or moveNumber]
 
     // The main thread has a SearchManager, the others have a NullSearchManager
     std::unique_ptr<ISearchManager> manager;

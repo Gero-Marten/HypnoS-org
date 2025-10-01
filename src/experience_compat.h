@@ -31,7 +31,7 @@
 namespace Hypnos {
 namespace Utility {
 
-// Replacement for map_path: in the new Stockfish path mapping is not needed
+// Replacement for map_path: in the new Hypnos path mapping is not needed
 
 inline std::string map_path(const std::string& s) { return s; }
 

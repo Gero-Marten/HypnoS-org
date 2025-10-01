@@ -32,7 +32,7 @@
 #include <string_view>
 #include <vector>
 
-#include "types.h"   // <<< AGGIUNTO: definisce Hypnos::Value
+#include "types.h"   // <<< ADDED: defines Hypnos::Value
 
 #define stringify2(x) #x
 #define stringify(x) stringify2(x)

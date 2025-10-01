@@ -18,9 +18,7 @@
 
 #include "engine.h"
 
-#include <cmath>      // std::ceil
-#include <algorithm>  // std::max
-#include <optional>
+#include <algorithm>
 #include <cassert>
 #include <deque>
 #include <iosfwd>
@@ -44,7 +42,6 @@
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
-#include "eval_weights.h"  // NNUE blending weights config
 
 // --- HypnoS Experience integration ---
 #ifdef HYP_FIXED_ZOBRIST
@@ -53,7 +50,7 @@
 #endif
 
 namespace Hypnos {
-	
+
 #ifdef HYP_FIXED_ZOBRIST
 static void on_exp_enabled(const Option& opt) {
     sync_cout << "info string Experience Enabled is now: "
@@ -126,12 +123,15 @@ Engine::Engine(std::optional<std::string> path) :
       }));
 
     options.add(  //
+      "Clean Search", Option(false));
+
+    options.add(  //
       "Ponder", Option(false));
 
     options.add(  //
-      "MultiPV", Option(1, 1, 256));
+      "MultiPV", Option(1, 1, MAX_MOVES));
 
-    options.add("Skill Level", Option(20, 0, 20));
+    options.add("Contempt", Option(20, 0, 100));
 
     options.add("MoveOverhead", Option(10, 0, 5000));
 
@@ -139,27 +139,13 @@ Engine::Engine(std::optional<std::string> path) :
 
     options.add("UCI_Chess960", Option(false));
 
-    options.add("UCI_LimitStrength", Option(false));
-
-    options.add("UCI_Elo",
-                Option(Hypnos::Search::Skill::LowestElo, Hypnos::Search::Skill::LowestElo,
-                       Hypnos::Search::Skill::HighestElo));
-
     options.add("UCI_ShowWDL", Option(false));
-
-    // Debug: print NNUE weights once per search at root (main thread)
-    options.add("NNUE Log Weights", Option(false));
-
-    // NNUE dynamic profile knobs removed: internal values are used instead
-    // (Open 126/134, End 134/126, Complexity Gain = 10)
 
     options.add(  //
       "SyzygyPath", Option("", [](const Option& o) {
           Tablebases::init(o);
           return std::nullopt;
       }));
-
-    options.add("SyzygyProbeDepth", Option(1, 1, 100));
 
     options.add("Syzygy50MoveRule", Option(true));
 
@@ -265,6 +251,75 @@ Engine::Engine(std::optional<std::string> path) :
                     return std::nullopt;
                 }));
 
+// ===== HypnoS HardSuite options (minimal) =====
+
+// HardSuiteMode — master switch: when ON, we enable the internal solver recipe.
+options.add("HardSuiteMode",
+    Option(true, [](const Option& opt) {
+        sync_cout << "info string HardSuiteMode = " << (opt ? "enabled" : "disabled") << sync_endl;
+        return std::nullopt;
+    }));
+
+// HardSuiteVerbose — print HY runtime info lines (default OFF)
+options.add("HardSuiteVerbose",
+    Option(false, [](const Option& opt){
+        sync_cout << "info string HardSuiteVerbose = "
+                  << (opt ? "enabled" : "disabled") << sync_endl;
+        return std::nullopt;
+    }));
+
+// HardSuiteTactical — boolean (default = ON)
+options.add("HardSuiteTactical",
+    Option(true, [](const Option& opt) {
+        sync_cout << "info string HardSuiteTactical = "
+                  << (opt ? "enabled" : "disabled") << sync_endl;
+        return std::nullopt;
+    }));
+
+// AutoSyncMultiPV — when ON, mirror SolveMultiPV into MultiPV (for GUIs that hide MultiPV)
+options.add("AutoSyncMultiPV",
+    Option(true, [](const Option& opt) {
+        sync_cout << "info string AutoSyncMultiPV = "
+                  << (opt ? "enabled" : "disabled") << sync_endl;
+        return std::nullopt;
+    }));
+
+// SolveMultiPV — spin (1..16): Phase-A width (no internal write to MultiPV)
+options.add("SolveMultiPV",
+    Option(4, 1, 16, [&](const Option& opt) {
+        const int v = int(opt);
+        sync_cout << "info string SolveMultiPV = " << v << sync_endl;
+
+        if (bool(options["AutoSyncMultiPV"])) {
+            // purely informational: we cap internally to this width
+            sync_cout << "info string (HY) AutoSync active: using SolveMultiPV as MultiPV cap = "
+                      << v << sync_endl;
+        }
+        return std::nullopt;
+    }));
+
+// PVVerifyDepth — spin (0..4) : re-search PV head with soft pruning disabled
+options.add("PVVerifyDepth",
+    Option(3, 0, 12, [](const Option& opt) {
+        sync_cout << "info string PVVerifyDepth = " << int(opt) << sync_endl;
+        return std::nullopt;
+    }));
+
+// VerifyCutoffsDepth — spin (0..10) : verify low-depth TT/ProbCut cutoffs
+options.add("VerifyCutoffsDepth",
+    Option(8, 0, 20, [](const Option& opt) {
+        sync_cout << "info string VerifyCutoffsDepth = " << int(opt) << sync_endl;
+        return std::nullopt;
+    }));
+
+// QuietSEEPruneGate — spin (0..100 cp) : keep quiet moves unless SEE is worse than -gate
+options.add("QuietSEEPruneGate",
+    Option(45, 0, 100, [](const Option& opt) {
+        sync_cout << "info string QuietSEEPruneGate = " << int(opt) << " cp" << sync_endl;
+        return std::nullopt;
+    }));
+
+// ===== end of HypnoS HardSuite options =====
     options.add(  //
       "EvalFile", Option(EvalFileDefaultNameBig, [this](const Option& o) {
           load_big_network(o);
@@ -276,68 +331,6 @@ Engine::Engine(std::optional<std::string> path) :
           load_small_network(o);
           return std::nullopt;
       }));
-
-    // --- NNUE dynamic/manual weights ---------------------------------------
-    options.add("NNUE Dynamic Weights",
-                Option(true, [](const Option& opt) {
-                    // Toggle Dynamic mode on/off. Last change wins.
-                    Hypnos::Eval::set_weights_mode(opt ? Hypnos::Eval::WeightsMode::Dynamic
-                                                       : Hypnos::Eval::WeightsMode::Default);
-                    sync_cout << "info string NNUE Dynamic Weights is now: "
-                              << (opt ? "enabled (mode=Dynamic)" : "disabled (mode=Default)") << sync_endl;
-                    return std::nullopt;
-                }));
-
-    options.add("NNUE ManualWeights",
-                Option(false, [](const Option& opt) {
-                    // Toggle Manual mode on/off. Last change wins.
-                    Hypnos::Eval::set_weights_mode(opt ? Hypnos::Eval::WeightsMode::Manual
-                                                       : Hypnos::Eval::WeightsMode::Default);
-                    sync_cout << "info string NNUE ManualWeights "
-                              << (opt ? "enabled (mode=Manual)" : "disabled (mode=Default)") << sync_endl;
-                    return std::nullopt;
-                }));
-
-    // --- NNUE strategy manual knobs ----------------------------------------
-    options.add("NNUE StrategyMaterialWeight",
-                Option(0, -12, 12, [](const Option& opt) {
-                    // Treat as delta on top of default 125; keep positional as-is
-                    const int baseMat = 125 + int(opt);
-                    const int curPos  = Hypnos::Eval::gEvalWeights.manualPos.load();
-                    Hypnos::Eval::set_manual_weights(baseMat, curPos);
-                    sync_cout << "info string NNUE StrategyMaterialWeight = 125 + (" << int(opt)
-                              << ") => " << baseMat << sync_endl;
-                    return std::nullopt;
-                }));
-
-    options.add("NNUE StrategyPositionalWeight",
-                Option(0, -12, 12, [](const Option& opt) {
-                    // Treat as delta on top of default 131; keep material as-is
-                    const int basePos = 131 + int(opt);
-                    const int curMat  = Hypnos::Eval::gEvalWeights.manualMat.load();
-                    Hypnos::Eval::set_manual_weights(curMat, basePos);
-                    sync_cout << "info string NNUE StrategyPositionalWeight = 131 + (" << int(opt)
-                              << ") => " << basePos << sync_endl;
-                    return std::nullopt;
-                }));
-
-    // Apply default NNUE mode according to current option defaults
-    if (bool(options["NNUE ManualWeights"]))
-        Hypnos::Eval::set_weights_mode(Hypnos::Eval::WeightsMode::Manual);
-    else if (bool(options["NNUE Dynamic Weights"]))
-        Hypnos::Eval::set_weights_mode(Hypnos::Eval::WeightsMode::Dynamic);
-    else
-        Hypnos::Eval::set_weights_mode(Hypnos::Eval::WeightsMode::Default);
-
-    // Log current NNUE mode at startup (for traceability)
-    {
-        using Hypnos::Eval::WeightsMode;
-        const auto m = static_cast<WeightsMode>(Hypnos::Eval::gEvalWeights.mode.load());
-        const char* modeStr = (m == WeightsMode::Manual ? "Manual"
-                             : m == WeightsMode::Dynamic ? "Dynamic"
-                             : "Default");
-        sync_cout << "info string NNUE Mode at startup: " << modeStr << sync_endl;
-    }
 
     load_networks();
     resize_threads();

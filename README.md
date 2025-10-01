@@ -2,7 +2,7 @@
   <img src="http://outskirts.altervista.org/forum/ext/dmzx/imageupload/img-files/2/ca292f8/8585091/34788e79c6bbe7cf7bb578c6fb4d11f8.jpg">
 </p>
 
-<h1 align="center">HypnoS</h1>
+<h1 align="center">HypnoS Iccf</h1>
 
   ### License
 
@@ -187,71 +187,50 @@ Once the game progresses beyond this ply count, the randomization feature is dis
 
 This setting prevents randomness from affecting important endgame decisions. 
 
-  ### NNUE Dynamic Weights
+  ### HardSuiteMode
 
-Type: Boolean — Default: true
+Type: Boolean (On/Off) — Default: On
 
-Description: enables dynamic blending of NNUE weights wMat/wPos using tapered game phase (0..24 → t 0..1024) and a small complexity boost when |psqt - positional| is large. No Shashin.
+Description: master switch for the solver recipe. When Off, engine behaves stock (no Phase-A/B, no extra checks).
 
-Interaction: if NNUE ManualWeights = true, Dynamic is bypassed (Manual has priority).
+  ### HardSuiteTactical
 
-Note: the Dyn Open/Endgame … options below define the profiles used by Dynamic.
+Type: Boolean (On/Off) — Default: On
 
-  ### NNUE ManualWeights
+Description: enables the Tactical solver path: Phase-A (wide) up to depth 12, then Phase-B (single PV). Effective only if HardSuiteMode is On.
 
-Type: Boolean — Default: false
+  ### SolveMultiPV
 
-Description: forces manual weights:
+Type: Integer (1..16) — Default: 4
 
-wMat = 125 + NNUE StrategyMaterialWeight
+Description: Phase-A width: number of principal variations explored in parallel at low depths. Wider helps surface the right idea early.
 
-wPos = 131 + NNUE StrategyPositionalWeight
-and ignores all Dyn … options.
+  ### AutoSyncMultiPV
 
-  ### NNUE StrategyMaterialWeight
+Type: Boolean (On/Off) — Default: On
 
-Type: Integer (-12..12) — Default: 0
+Description: if On, the engine internally caps effective MultiPV to SolveMultiPV (without writing GUI MultiPV). Avoids GUI buffer overruns in UIs that hide MultiPV (e.g., Fritz).
 
-Description: delta over 125 (Manual mode only).
+  ### PVVerifyDepth
 
-  ### NNUE StrategyPositionalWeight
+Type: Integer (0..12) — Default: 3
 
-Type: Integer (-12..12) — Default: 0
+Description: PV-head verification for the first N plies at PV nodes: softens pruning (LMR−1, LMP off) to stabilize the main line and reduce bogus PVs.
 
-Description: delta over 131 (Manual mode only).
+  ### VerifyCutoffsDepth
 
-  ### Dyn Open Mat
+Type: Integer (0..20) — Default: 8
 
-Type: Integer (50..200) — Default: 115
+Description: for depths ≤ N at non-PV nodes, confirm TT-based cutoffs with a narrow re-search before accepting. Reduces shallow false cutoffs. Not applied in qsearch.
 
-Description: opening profile for material weight (Dynamic).
+  ### QuietSEEPruneGate
 
-  ### Dyn Open Pos
+Type: Integer (0..100 cp) — Default: 45 cp
 
-Type: Integer (50..200) — Default: 145
+Description: SEE gate for quiet pruning. Keep quiet moves if SEE ≥ −gate; otherwise fall back to the stock depth-scaled SEE threshold. Preserves critical quiets in tactical positions.
 
-Description: opening profile for positional weight (Dynamic).
+  ### HardSuiteVerbose
 
-  ### Dyn Endgame Mat
+Type: Boolean (On/Off) — Default: Off
 
-Type: Integer (50..200) — Default: 145
-
-Description: endgame profile for material weight (Dynamic).
-
-  ### Dyn Endgame Pos
-
-Type: Integer (50..200) — Default: 115
-
-Description: endgame profile for positional weight (Dynamic).
-
-  ### Dyn Complexity Gain (%)
-
-Type: Integer (0..50) — Default: 12
-
-Description: small percentage boost on wPos when the NNUE components disagree (large |psqt - positional|).
-
-  ### (Debug) NNUE Log Weights
-
-Type: Boolean — Default: false
-
-Description: prints one line per search at root: wMat/wPos, phase t, small/big net, scaled threshold.
+Description: prints runtime info lines (e.g., “Using MultiPV=…”) to UCI output when enabled. Off by default to avoid GUI spam.

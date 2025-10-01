@@ -35,8 +35,7 @@ class Score {
     };
 
     struct Tablebase {
-        int  plies;
-        bool win;
+        int value;
     };
 
     struct InternalUnits {

@@ -158,28 +158,32 @@ void UCIEngine::init_search_update_listeners() {
 void UCIEngine::loop() {
     std::string token, cmd;
 
-    // Execute any command-line arguments once
     for (int i = 1; i < cli.argc; ++i)
         cmd += std::string(cli.argv[i]) + " ";
 
-    do {
-        // If there are no arguments, read from stdin; EOF => quit
-        if (cli.argc == 1 && !std::getline(std::cin, cmd))
+    do
+    {
+        if (cli.argc == 1
+            && !getline(std::cin, cmd))  // Wait for an input or an end-of-file (EOF) indication
             cmd = "quit";
 
         std::istringstream is(cmd);
 
-        token.clear();                 // Avoid "stale" token on empty line
+        token.clear();  // Avoid a stale if getline() returns nothing or a blank line
         is >> std::skipws >> token;
 
-        if (token == "quit" || token == "stop") {
+        if (token == "quit" || token == "stop")
             engine.stop();
-        }
-        else if (token == "ponderhit") {
-            // The GUI played the expected move: disable ponder
+
+        // The GUI sends 'ponderhit' to tell that the user has played the expected move.
+        // So, 'ponderhit' is sent if pondering was done on the same move that the user
+        // has played. The search should continue, but should also switch from pondering
+        // to the normal search.
+        else if (token == "ponderhit")
             engine.set_ponderhit(false);
-        }
-        else if (token == "uci") {
+
+        else if (token == "uci")
+        {
             sync_cout << "id name " << engine_info(true) << "\n"
                       << engine.get_options() << sync_endl;
             sync_cout << "uciok" << sync_endl;
@@ -203,8 +207,12 @@ void UCIEngine::loop() {
             print_info_string(engine.thread_allocation_information_as_string());
             go(is);
         }
-        else if (token == "position") {
+        else if (token == "position")
+        {
             position(is);
+
+            if (engine.get_options()["Clean Search"] == 1)
+              engine.search_clear();
         }
         else if (token == "ucinewgame") {
 #if defined(HYP_FIXED_ZOBRIST)
@@ -223,18 +231,19 @@ void UCIEngine::loop() {
 #endif
             sync_cout << "readyok" << sync_endl;
         }
-        else if (token == "bench") {
+
+        // Add custom non-UCI commands, mainly for debugging purposes.
+        // These commands must not be used during a search!
+        else if (token == "flip")
+            engine.flip();
+        else if (token == "bench")
             bench(is);
-        }
-        else if (token == BenchmarkCommand) {
+        else if (token == BenchmarkCommand)
             benchmark(is);
-        }
-        else if (token == "d") {
+        else if (token == "d")
             sync_cout << engine.visualize() << sync_endl;
-        }
-        else if (token == "eval") {
+        else if (token == "eval")
             engine.trace_eval();
-        }
         else if (token == "compiler") {
             sync_cout << compiler_info() << sync_endl;
         }
@@ -389,6 +398,27 @@ void UCIEngine::loop() {
             }
         }
 #endif
+        else if (token == "export_net")
+        {
+            std::pair<std::optional<std::string>, std::string> files[2];
+
+            if (is >> std::skipws >> files[0].second)
+                files[0].first = files[0].second;
+
+            if (is >> std::skipws >> files[1].second)
+                files[1].first = files[1].second;
+
+            engine.save_network(files);
+        }
+        else if (token == "--help" || token == "help" || token == "--license" || token == "license")
+            sync_cout
+              << "\nHypnos is a powerful chess engine for playing and analyzing."
+                 "\nIt is released as free software licensed under the GNU GPLv3 License."
+                 "\nHypnos is normally used with a graphical user interface (GUI) and implements"
+                 "\nthe Universal Chess Interface (UCI) protocol to communicate with a GUI, an API, etc."
+                 "\nFor any further information, visit https://github.com/official-stockfish/Stockfish#readme"
+                 "\nor read the corresponding README.md and Copying.txt files distributed along with this program.\n"
+              << sync_endl;
         else if (!token.empty() && token[0] != '#') {
             sync_cout << "Unknown command: '" << cmd
                       << "'. Type help for more information." << sync_endl;
@@ -405,18 +435,17 @@ void UCIEngine::loop() {
     sync_cout << "info string [EXP] saved on quit" << sync_endl;
 #endif
 }
-
 Search::LimitsType UCIEngine::parse_limits(std::istream& is) {
     Search::LimitsType limits;
-    std::string        token;
+    std::string token;
 
     limits.startTime = now();  // The search starts as early as possible
 
-    while (is >> token)
-        if (token == "searchmoves")  // Needs to be the last command on the line
+    while (is >> token) {
+        if (token == "searchmoves") {
             while (is >> token)
                 limits.searchmoves.push_back(to_lower(token));
-
+        }
         else if (token == "wtime")
             is >> limits.time[WHITE];
         else if (token == "btime")
@@ -441,6 +470,7 @@ Search::LimitsType UCIEngine::parse_limits(std::istream& is) {
             limits.infinite = 1;
         else if (token == "ponder")
             limits.ponderMode = true;
+    }
 
     return limits;
 }
@@ -768,18 +798,17 @@ int win_rate_model(Value v, const Position& pos) {
 }
 
 std::string UCIEngine::format_score(const Score& s) {
-    constexpr int TB_CP = 20000;
     const auto    format =
       overload{[](Score::Mate mate) -> std::string {
                    auto m = (mate.plies > 0 ? (mate.plies + 1) : mate.plies) / 2;
                    return std::string("mate ") + std::to_string(m);
                },
                [](Score::Tablebase tb) -> std::string {
-                   return std::string("cp ")
-                        + std::to_string((tb.win ? TB_CP - tb.plies : -TB_CP - tb.plies));
+                   return std::string("cp ") + std::to_string(tb.value);
                },
                [](Score::InternalUnits units) -> std::string {
-                   return std::string("cp ") + std::to_string(units.value);
+                   int rounded = std::round(units.value / 5) * 5;
+                   return std::string("cp ") + std::to_string(rounded);
                }};
 
     return s.visit(format);
@@ -796,6 +825,13 @@ int UCIEngine::to_cp(Value v, const Position& pos) {
     auto [a, b] = win_rate_params(pos);
 
     return std::round(100 * int(v) / a);
+}
+
+int UCIEngine::to_int(Value v, const Position& pos) {
+
+    auto [a, b] = win_rate_params(pos);
+
+    return std::round(a * int(v) / 100);
 }
 
 std::string UCIEngine::wdl(Value v, const Position& pos) {

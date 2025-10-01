@@ -55,6 +55,7 @@ int main(int argc, char* argv[]) {
 
     Bitboards::init();
     Position::init();
+
     UCIEngine uci(argc, argv);
 
     Tune::init(uci.engine_options());

@@ -105,8 +105,13 @@ int LeadPawnsSize[6][4];        // [leadPawnsCnt][FILE_A..FILE_D]
 bool pawns_comp(Square i, Square j) { return MapPawns[i] < MapPawns[j]; }
 int  off_A1H8(Square sq) { return int(rank_of(sq)) - file_of(sq); }
 
-constexpr Value WDL_to_value[] = {-VALUE_MATE + MAX_PLY + 1, VALUE_DRAW - 2, VALUE_DRAW,
-                                  VALUE_DRAW + 2, VALUE_MATE - MAX_PLY - 1};
+constexpr Value WDL_to_value[] = {
+   -VALUE_TB_WIN + 7 * tbConversionFactor,
+    VALUE_DRAW - 2,
+    VALUE_DRAW,
+    VALUE_DRAW + 2,
+    VALUE_TB_WIN - 7 * tbConversionFactor
+};
 
 template<typename T, int Half = sizeof(T) / 2, int End = sizeof(T) - 1>
 inline void swap_endian(T& x) {
@@ -1655,12 +1660,11 @@ bool Tablebases::root_probe(Position&          pos,
         // Determine the score to be displayed for this move. Assign at least
         // 1 cp to cursed wins and let it grow to 49 cp as the positions gets
         // closer to a real win.
-        m.tbScore = r >= bound ? VALUE_MATE - MAX_PLY - 1
-                  : r > 0  ? Value((std::max(3, r - (MAX_DTZ / 2 - 200)) * int(PawnValue)) / 200)
-                  : r == 0 ? VALUE_DRAW
-                  : r > -bound
-                    ? Value((std::min(-3, r + (MAX_DTZ / 2 - 200)) * int(PawnValue)) / 200)
-                    : -VALUE_MATE + MAX_PLY + 1;
+        m.tbScore = r >= bound ? VALUE_TB_WIN - (10 * tbConversionFactor * (dtz >=  101)) - tbConversionFactor * (1 + popcount(pos.pieces(~pos.side_to_move())))
+                  : r >  0     ? Value((std::max( 3, r - (MAX_DTZ / 2 - 200)) * int(tbConversionFactor)) / 200)
+                  : r == 0     ? VALUE_DRAW
+                  : r > -bound ? Value((std::min(-3, r + (MAX_DTZ / 2- 200)) * int(tbConversionFactor)) / 200)
+                  :             -VALUE_TB_WIN + (10 * tbConversionFactor * (dtz <= -101)) + tbConversionFactor * (1 + popcount(pos.pieces( pos.side_to_move())));
     }
 
     return true;
@@ -1716,18 +1720,13 @@ Config Tablebases::rank_root_moves(const OptionsMap&  options,
 
     config.rootInTB    = false;
     config.useRule50   = bool(options["Syzygy50MoveRule"]);
-    config.probeDepth  = int(options["SyzygyProbeDepth"]);
+    config.probeDepth  = 0;
     config.cardinality = int(options["SyzygyProbeLimit"]);
-
-    bool dtz_available = true;
 
     // Tables with fewer pieces than SyzygyProbeLimit are searched with
     // probeDepth == DEPTH_ZERO
     if (config.cardinality > MaxCardinality)
-    {
         config.cardinality = MaxCardinality;
-        config.probeDepth  = 0;
-    }
 
     if (config.cardinality >= popcount(pos.pieces()) && !pos.can_castle(ANY_CASTLING))
     {
@@ -1737,7 +1736,6 @@ Config Tablebases::rank_root_moves(const OptionsMap&  options,
         if (!config.rootInTB)
         {
             // DTZ tables are missing; try to rank moves using WDL tables
-            dtz_available   = false;
             config.rootInTB = root_probe_wdl(pos, rootMoves, options["Syzygy50MoveRule"]);
         }
     }
@@ -1748,10 +1746,6 @@ Config Tablebases::rank_root_moves(const OptionsMap&  options,
         std::stable_sort(
           rootMoves.begin(), rootMoves.end(),
           [](const Search::RootMove& a, const Search::RootMove& b) { return a.tbRank > b.tbRank; });
-
-        // Probe during search only if DTZ is not available and we are winning
-        if (dtz_available || rootMoves[0].tbScore <= VALUE_DRAW)
-            config.cardinality = 0;
     }
     else
     {

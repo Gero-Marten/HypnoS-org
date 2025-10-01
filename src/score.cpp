@@ -33,10 +33,9 @@ Score::Score(Value v, const Position& pos) {
     {
         score = InternalUnits{UCIEngine::to_cp(v, pos)};
     }
-    else if (std::abs(v) <= VALUE_TB)
+    else if (std::abs(v) <= VALUE_MATE_IN_MAX_PLY)
     {
-        auto distance = VALUE_TB - std::abs(v);
-        score         = (v > 0) ? Tablebase{distance, true} : Tablebase{-distance, false};
+        score = Tablebase{100 * v / tbConversionFactor};
     }
     else
     {

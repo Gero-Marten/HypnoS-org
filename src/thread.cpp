@@ -247,8 +247,6 @@ void ThreadPool::start_thinking(const OptionsMap&  options,
     main_manager()->stopOnPonderhit = stop = abortedSearch = false;
     main_manager()->ponder                                 = limits.ponderMode;
 
-    increaseDepth = true;
-
     Search::RootMoves rootMoves;
     const auto        legalmoves = MoveList<LEGAL>(pos);
 
@@ -282,10 +280,16 @@ void ThreadPool::start_thinking(const OptionsMap&  options,
     {
         th->run_custom_job([&]() {
             th->worker->limits = limits;
-            th->worker->nodes = th->worker->tbHits = th->worker->nmpMinPly =
-              th->worker->bestMoveChanges          = 0;
-            th->worker->rootDepth = th->worker->completedDepth = 0;
-            th->worker->rootMoves                              = rootMoves;
+            th->worker->nodes = 0;
+            th->worker->tbHits = 0;
+            th->worker->nmpGuardV = 0;
+            th->worker->nmpGuard = 0;
+            th->worker->bestMoveChanges = 0;
+            th->worker->rootDepth = 0;
+            th->worker->completedDepth = 0;
+            th->worker->nmpSide = 0;
+            th->worker->pvValue = VALUE_NONE;
+            th->worker->rootMoves = rootMoves;
             th->worker->rootPos.set(pos.fen(), pos.is_chess960(), &th->worker->rootState);
             th->worker->rootState = setupStates->back();
             th->worker->tbConfig  = tbConfig;
