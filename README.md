@@ -220,36 +220,6 @@ Type: Integer (-12..12) — Default: 0
 
 Description: delta over 131 (Manual mode only).
 
-  ### Dyn Open Mat
-
-Type: Integer (50..200) — Default: 115
-
-Description: opening profile for material weight (Dynamic).
-
-  ### Dyn Open Pos
-
-Type: Integer (50..200) — Default: 145
-
-Description: opening profile for positional weight (Dynamic).
-
-  ### Dyn Endgame Mat
-
-Type: Integer (50..200) — Default: 145
-
-Description: endgame profile for material weight (Dynamic).
-
-  ### Dyn Endgame Pos
-
-Type: Integer (50..200) — Default: 115
-
-Description: endgame profile for positional weight (Dynamic).
-
-  ### Dyn Complexity Gain (%)
-
-Type: Integer (0..50) — Default: 12
-
-Description: small percentage boost on wPos when the NNUE components disagree (large |psqt - positional|).
-
   ### (Debug) NNUE Log Weights
 
 Type: Boolean — Default: false
