@@ -133,8 +133,10 @@ Engine::Engine(std::optional<std::string> path) :
 
     options.add("Skill Level", Option(20, 0, 20));
 
-    options.add("MoveOverhead", Option(10, 0, 5000));
-
+    // Time manager knobs (defaults per your request)
+    options.add("Move Overhead",          Option(100, 0, 5000));   // ms
+    options.add("Minimum Thinking Time",  Option(100, 0, 2000));   // ms
+    options.add("Slow Mover",             Option(100, 10, 500));   // percent (100 = no change)
     options.add("nodestime", Option(0, 0, 10000));
 
     options.add("UCI_Chess960", Option(false));
