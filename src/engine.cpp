@@ -147,6 +147,12 @@ Engine::Engine(std::optional<std::string> path) :
 
     options.add("UCI_ShowWDL", Option(false));
 
+    // Fail-high/low info throttling (UCI-tunable)
+    options.add("FailInfo Enabled",   Option(true));
+    options.add("FailInfo First ms",  Option(4000, 0, 60000));
+    options.add("FailInfo Min Nodes", Option(10000000, 0, 1000000000));
+    options.add("FailInfo Rate ms",   Option(400, 0, 10000));
+
     // Debug: print NNUE weights once per search at root (main thread)
     options.add("NNUE Log Weights", Option(false));
 
