@@ -202,7 +202,7 @@ Engine::Engine(std::optional<std::string> path) :
     //#ifdef HYP_FIXED_ZOBRIST
     // ===== HypnoS Experience UCI options =====
     options.add("Experience Enabled",
-                Option(false, [](const Option& opt) {
+                Option(true, [](const Option& opt) {
                     on_exp_enabled(opt);
                     sync_cout << "info string Experience Enabled is now: "
                               << (opt ? "enabled" : "disabled") << sync_endl;

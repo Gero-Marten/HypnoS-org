@@ -59,7 +59,7 @@ void TimeManagement::init(Search::LimitsType& limits,
     if (limits.time[us] == 0)
         return;
 
-    TimePoint moveOverhead = TimePoint(options["MoveOverhead"]);
+    TimePoint moveOverhead = TimePoint(options["Move Overhead"]);
 
     // Extra UCI knobs
     TimePoint minThinkingTime = TimePoint(options["Minimum Thinking Time"]); // ms

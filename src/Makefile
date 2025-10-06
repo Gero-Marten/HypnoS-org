@@ -38,11 +38,11 @@ else ifeq ($(COMP),mingw)
 endif
 
 ### Executable name
-# ifeq ($(target_windows),yes)
-# 	EXE = hypnos.exe
-# else
-# 	EXE = hypnos
-# endif
+ifeq ($(target_windows),yes)
+	EXE = hypnos.exe
+else
+	EXE = hypnos
+endif
 
 ### Installation dir definitions
 PREFIX = /usr/local
@@ -668,13 +668,9 @@ ifeq ($(optimize),yes)
 	endif
 endif
 
-.PHONY: FORCE
-misc.o: FORCE
-FORCE: ;
-
 ### 3.4 Bits
 ifeq ($(bits),64)
-CXXFLAGS += -DIS_64BIT
+	CXXFLAGS += -DIS_64BIT
 endif
 
 ### 3.5 prefetch and popcount
@@ -813,11 +809,10 @@ ifneq ($(GIT_SHA), )
 endif
 
 ### 3.8.2 Try to include git commit date for versioning
-# (removed – engine_version_info now uses __DATE__)
-# GIT_DATE := $(shell git show -s --date=format:'%Y%m%d' --format=%cd HEAD 2>/dev/null)
-# ifneq ($(GIT_DATE), )
-#     CXXFLAGS += -DGIT_DATE=$(GIT_DATE)
-# endif
+GIT_DATE := $(shell git show -s --date=format:'%Y%m%d' --format=%cd HEAD 2>/dev/null)
+ifneq ($(GIT_DATE), )
+	CXXFLAGS += -DGIT_DATE=$(GIT_DATE)
+endif
 
 ### 3.8.3 Try to include architecture
 ifneq ($(ARCH), )
@@ -869,12 +864,6 @@ endif
 ### ==========================================================================
 ### Section 4. Public Targets
 ### ==========================================================================
-
-CXXFLAGS += -DEvalFileDefaultNameBig=\"$(EVALFILE)\"
-CXXFLAGS += -DEvalFileDefaultNameSmall=\"nn-37f18f62d772.nnue\"
-
-build: config-sanity
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) all
 
 help:
 	@echo "" && \
@@ -959,49 +948,6 @@ endif
 	clang-profile-use clang-profile-make FORCE \
 	format analyze
 
-# === CLEAN CONFIG =============================================================
-RM    ?= rm -f
-RMDIR ?= rm -rf
-
-BINDIR := .
-PROG   := hypnos
-EXE    := $(PROG).exe
-
-# File/artefatti da rimuovere
-EXTRA_CLEAN := \
-  $(EXE) \
-  Hypnos.exp \
-  $(PROG).res \
-  $(PROG).lto_wrapper_args* \
-  $(PROG).ltrans* \
-  $(PROG).wpa.args* \
-  *.map \
-  *.ilk \
-  *.pdb \
-  .depend *~ core bench.txt PGOBENCH.out
-
-OBJ_GLOBS := \
-  *.o *.obj *.a *.lib \
-  syzygy/*.o nnue/*.o nnue/features/*.o
-
-PROF_GLOBS := \
-  *.gcda *.gcno nnue/*.gcda nnue/features/*.gcda syzygy/*.gcda \
-  *.profraw *.profdata \
-  $(PROG).*args* $(PROG).*lt* $(PROG).res ./-lstdc++.res
-
-# ============================================================================
-
-objclean:
-	-$(RM) $(OBJ_GLOBS)
-
-profileclean:
-	-$(RMDIR) profdir
-	-$(RM) $(PROF_GLOBS)
-
-clean: objclean profileclean
-	-$(RM) $(EXTRA_CLEAN)
-	@echo Clean done.
-
 analyze: net config-sanity objclean
 	$(MAKE) -k ARCH=$(ARCH) COMP=$(COMP) $(OBJS)
 
@@ -1028,8 +974,29 @@ strip:
 	$(STRIP) $(EXE)
 
 install:
-	@echo "Nothing to install (output: $(EXE))"
+	-mkdir -p -m 755 $(BINDIR)
+	-cp $(EXE) $(BINDIR)
+	$(STRIP) $(BINDIR)/$(EXE)
 
+# clean all
+clean: objclean profileclean
+	@rm -f .depend *~ core
+
+# clean binaries and objects
+objclean:
+	@rm -f hypnos hypnos.exe *.o ./syzygy/*.o ./nnue/*.o ./nnue/features/*.o
+
+# clean auxiliary profiling files
+profileclean:
+	@rm -rf profdir
+	@rm -f bench.txt *.gcda *.gcno ./syzygy/*.gcda ./nnue/*.gcda ./nnue/features/*.gcda *.s PGOBENCH.out
+	@rm -f hypnos.profdata *.profraw
+	@rm -f hypnos.*args*
+	@rm -f hypnos.*lt*
+	@rm -f hypnos.res
+	@rm -f ./-lstdc++.res
+
+# evaluation network (nnue)
 net:
 	@$(SHELL) ../scripts/net.sh
 
@@ -1042,7 +1009,7 @@ format:
 
 all: $(EXE) .depend
 
-config-sanity:
+config-sanity: net
 	@echo ""
 	@echo "Config:" && \
 	echo "debug: '$(debug)'" && \
@@ -1111,7 +1078,7 @@ config-sanity:
 	 test "$(comp)" = "aarch64-linux-android21-clang")
 
 $(EXE): $(OBJS)
-	$(CXX) -o $(EXE) $(OBJS) $(LDFLAGS) $(EXTRALDFLAGS)
+	+$(CXX) -o $@ $(OBJS) $(LDFLAGS)
 
 # Force recompilation to ensure version info is up-to-date
 misc.o: FORCE

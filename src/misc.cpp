@@ -41,14 +41,7 @@ namespace Hypnos {
 namespace {
 
 // Version number or dev.
-constexpr std::string_view version = "";
-
-// --- Engine version string: "HypnoS ddMMyyyy" (no dev, no SHA) ---
-
-#ifndef STR_HELPER
-#  define STR_HELPER(x) #x
-#  define STR(x) STR_HELPER(x)
-#endif
+constexpr std::string_view version = "1.0.1";
 
 // Our fancy logging facility. The trick here is to replace cin.rdbuf() and
 // cout.rdbuf() with two Tie objects that tie cin and cout to a file stream. We
@@ -120,23 +113,46 @@ class Logger {
 
 }  // namespace
 
-// Output: "HypnoS ddMMyyyy" (no dev, no SHA)
+
+// Returns the full name of the current HypnoS version.
+//
+// For local dev compiles we try to append the commit SHA and
+// commit date from git. If that fails only the local compilation
+// date is set and "nogit" is specified:
+//      HypnoS dev-YYYYMMDD-SHA
+//      or
+//      HypnoS dev-YYYYMMDD-nogit
+//
+// For releases (non-dev builds) we only include the version number:
+//      HypnoS version
 std::string engine_version_info() {
-    std::ostringstream ss;
-    ss << "HypnoS ";
+    std::stringstream ss;
+    ss << "HypnoS " << version << std::setfill('0');
 
-    // Fallback: __DATE__ like "Sep 28 2025" -> "28092025"
-    std::istringstream date(__DATE__);
-    std::string mon; int day = 1, year = 2000;
-    date >> mon >> day >> year;
+    if constexpr (version == "dev")
+    {
+        ss << "-";
+#ifdef GIT_DATE
+        ss << stringify(GIT_DATE);
+#else
+        constexpr std::string_view months("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec");
 
-    const char* mons = "JanFebMarAprMayJunJulAugSepOctNovDec";
-    int m = 1 + (int)(std::string(mons).find(mon) / 3);
+        std::string       month, day, year;
+        std::stringstream date(__DATE__);  // From compiler, format is "Sep 21 2008"
 
-    ss << std::setfill('0')
-       << std::setw(2) << day
-       << std::setw(2) << m
-       << std::setw(4) << year;
+        date >> month >> day >> year;
+        ss << year << std::setw(2) << std::setfill('0') << (1 + months.find(month) / 4)
+           << std::setw(2) << std::setfill('0') << day;
+#endif
+
+        ss << "-";
+
+#ifdef GIT_SHA
+        ss << stringify(GIT_SHA);
+#else
+        ss << "nogit";
+#endif
+    }
 
     return ss.str();
 }
