@@ -225,3 +225,39 @@ Description: delta over 131 (Manual mode only).
 Type: Boolean — Default: false
 
 Description: prints one line per search at root: wMat/wPos, phase t, small/big net, scaled threshold.
+
+
+  ### Fail-High/Low Info (UCI)
+
+What it is
+Controls how often the engine prints info/PV lines when a fail-high/low occurs, to avoid GUI spam while keeping feedback timely.
+
+  ### Options
+
+FailInfo Enabled (bool, default true) — master switch.
+
+FailInfo First ms (int, 0..60000, default 4000) — time gate (ms from search start) for the first update.
+
+FailInfo Min Nodes (int, 0..1000000000, default 10000000) — alternative nodes gate for the first update.
+
+FailInfo Rate ms (int, 0..10000, default 400) — minimal interval between consecutive updates.
+
+  ### Behavior
+
+First update is allowed when (elapsed ≥ First ms) OR (nodes ≥ Min Nodes).
+
+Subsequent updates: at most one every Rate ms.
+
+Active only for main thread, MultiPV=1, and fail-high/low.
+
+The rate limiter resets at the start of each new root iteration (rootDepth==1).
+
+Changes apply from the next search (after ucinewgame or new game).
+
+  ### Recommended presets
+
+Bullet/Blitz: First 800–1500, MinNodes 5–10M, Rate 300–400.
+
+Rapid: First 3000–6000, MinNodes 10–20M, Rate 400–800.
+
+Classical: First 4000–8000, MinNodes 20–40M, Rate 600–1000.
