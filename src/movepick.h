@@ -66,7 +66,7 @@ class MovePicker {
     const PieceToHistory**       continuationHistory;
     const PawnHistory*           pawnHistory;
     Move                         ttMove;
-    ExtMove *                    cur, *endCur, *endBadCaptures, *endCaptures, *endGenerated = moves;
+    ExtMove *                    cur, *endCur, *endBadCaptures, *endCaptures, *endGenerated;
     int                          stage;
     int                          threshold;
     Depth                        depth;
@@ -75,6 +75,6 @@ class MovePicker {
     ExtMove                      moves[MAX_MOVES];
 };
 
-}  // namespace Stockfish
+}  // namespace Hypnos
 
 #endif  // #ifndef MOVEPICK_H_INCLUDED

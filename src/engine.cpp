@@ -133,7 +133,7 @@ Engine::Engine(std::optional<std::string> path) :
 
     options.add("Contempt", Option(20, 0, 100));
 
-    options.add("MoveOverhead", Option(10, 0, 5000));
+    options.add("Move Overhead", Option(10, 0, 5000));
 
     options.add("nodestime", Option(0, 0, 10000));
 
@@ -180,7 +180,7 @@ Engine::Engine(std::optional<std::string> path) :
     //#ifdef HYP_FIXED_ZOBRIST
     // ===== HypnoS Experience UCI options =====
     options.add("Experience Enabled",
-                Option(false, [](const Option& opt) {
+                Option(true, [](const Option& opt) {
                     on_exp_enabled(opt);
                     sync_cout << "info string Experience Enabled is now: "
                               << (opt ? "enabled" : "disabled") << sync_endl;

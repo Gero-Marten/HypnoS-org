@@ -76,7 +76,6 @@ std::ostream& operator<<(std::ostream& os, const Position& pos) {
         os << " | " << (1 + r) << "\n +---+---+---+---+---+---+---+---+\n";
     }
 
-
     os << "   a   b   c   d   e   f   g   h\n"
        << "\nFen: " << pos.fen() << "\nKey: " << std::hex << std::uppercase << std::setfill('0')
        << std::setw(16) << pos.key() << std::setfill(' ') << std::dec << "\nCheckers: ";
@@ -1114,6 +1113,8 @@ bool Position::see_ge(Move m, int threshold) const {
         return VALUE_ZERO >= threshold;
 
     Square from = m.from_sq(), to = m.to_sq();
+
+    assert(piece_on(from) != NO_PIECE);
 
     int swap = PieceValue[piece_on(to)] - threshold;
     if (swap < 0)
