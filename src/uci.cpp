@@ -400,6 +400,29 @@ void UCIEngine::loop() {
             }
         }
 #endif
+
+        else if (token == "legal") {
+            // Print every LEGAL move in the current engine position.
+            // Format: "legal <m1> <m2> ..."
+            sync_cout_start();
+            std::cout << "legal";
+            for (Move m : MoveList<LEGAL>(pos))
+                std::cout << ' ' << UCIEngine::move(m, pos.is_chess960());
+            std::cout << std::endl;
+            sync_cout_end();
+        }
+
+        else if (token == "moves") {
+            // Alias of 'legal' for viewers expecting 'moves' token.
+            // Format: "moves <m1> <m2> ..."
+            sync_cout_start();
+            std::cout << "moves";
+            for (Move m : MoveList<LEGAL>(pos))
+                std::cout << ' ' << UCIEngine::move(m, pos.is_chess960());
+            std::cout << std::endl;
+            sync_cout_end();
+        }
+
         else if (!token.empty() && token[0] != '#') {
             sync_cout << "Unknown command: '" << cmd
                       << "'. Type help for more information." << sync_endl;
