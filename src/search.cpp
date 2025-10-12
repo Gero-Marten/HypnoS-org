@@ -447,6 +447,11 @@ void Search::Worker::start_searching() {
             // Debug line to confirm EXP write per search
             sync_cout << "info string [EXP] add_pv_experience depth="
                       << effDepth << sync_endl;
+
+            // If this run was invoked with 'searchmoves' (typical of the viewer),
+            // flush immediately so the external tool sees the entry right away.
+            if (!limits.searchmoves.empty())
+                Experience::save();
         }
     }
 #endif
@@ -456,13 +461,6 @@ void Search::Worker::start_searching() {
     if (limits.npmsec)
         main_manager()->tm.advance_nodes_time(threads.nodes_searched()
                                               - limits.inc[rootPos.side_to_move()]);
-
-    // When playing in 'nodes as time' mode, subtract the searched nodes from
-    // the available ones before exiting.
-    if (limits.npmsec)
-        main_manager()->tm.advance_nodes_time(threads.nodes_searched()
-                                              - limits.inc[rootPos.side_to_move()]);
-
 
     Worker* bestThread = this;
     Skill   skill =
@@ -472,88 +470,6 @@ void Search::Worker::start_searching() {
         && rootMoves[0].pv[0] != Move::none())
         bestThread = threads.get_best_thread()->worker.get();
 
-#if defined(HYP_FIXED_ZOBRIST)
-    // --- HypnoS Experience: writing learning outcomes at the end of research-----------------
-    if (bestThread->rootMoves[0].pv[0] != Move::none()
-        && !Experience::is_learning_paused()
-        && !bestThread->rootPos.is_chess960()
-        && !(bool) options["Experience Readonly"]
-        && !(bool) options["UCI_LimitStrength"]
-        && bestThread->completedDepth >= Experience::MinDepth)
-    {
-        // 1) Add the best PV
-        Experience::add_pv_experience(bestThread->rootPos.key(),
-                                      bestThread->rootMoves[0].pv[0],
-                                      bestThread->rootMoves[0].score,
-                                      bestThread->completedDepth);
-
-        // Debug log: conferma inserimento PV
-        sync_cout << "info string [EXP] add_pv_experience depth="
-                  << bestThread->completedDepth << sync_endl;
-
-        // 2) Collect "alternative" moves from threads (MultiPV experience)
-        struct UniqueMoveInfo {
-            Move  move;
-            Depth depth;
-            Value scoreSum;
-            int   count;
-        };
-
-        std::vector<UniqueMoveInfo> uniqueMoves;
-
-        for (auto&& th : threads)
-        {
-            auto* w = th->worker.get();
-            if (!w || w->rootMoves.empty() || w->rootMoves[0].pv.empty())
-                continue;
-
-            // Skip the best move already added
-            if (w->rootMoves[0].pv[0] == bestThread->rootMoves[0].pv[0])
-                continue;
-
-            UniqueMoveInfo thisMove{w->rootMoves[0].pv[0], w->completedDepth,
-                                    w->rootMoves[0].score, 1};
-
-            bool merged = false;
-            for (auto& um : uniqueMoves)
-            {
-                if (um.move == thisMove.move)
-                {
-                    // Keep the version with greater depth; if equal, accumulate score
-                    if (thisMove.depth > um.depth)
-                        um = thisMove;
-                    else if (thisMove.depth == um.depth)
-                    {
-                        um.scoreSum += thisMove.scoreSum;
-                        um.count++;
-                    }
-                    merged = true;
-                    break;
-                }
-            }
-            if (!merged)
-                uniqueMoves.push_back(thisMove);
-        }
-
-        for (const auto& info : uniqueMoves) {
-            Experience::add_multipv_experience(rootPos.key(),
-                                               info.move,
-                                               info.scoreSum / info.count,
-                                               info.depth);
-
-            // Debug log: confirm MultiPV insertion
-            sync_cout << "info string [EXP] add_multipv_experience depth="
-                      << info.depth << sync_endl;
-        }
-
-        // 3) If the game is "decided", save and suspend learning
-        if (Utility::is_game_decided(rootPos, bestThread->rootMoves[0].score))
-        {
-            Experience::save();
-            Experience::pause_learning();
-        }
-    }
-#endif
 
     main_manager()->bestPreviousScore        = bestThread->rootMoves[0].score;
     main_manager()->bestPreviousAverageScore = bestThread->rootMoves[0].averageScore;

@@ -27,7 +27,10 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
+#include <type_traits>
 #include "misc.h"
+#include "movegen.h" 
 #include "position.h"
 #include "thread.h"
 #include "experience.h"
@@ -754,12 +757,29 @@ class ExperienceData {
         }
         else
         {
-            for (auto& newExp : {_newPvExp, _newMultiPvExp})
+            // Deduplicate new entries (same key+move) within this incremental batch
+            std::unordered_set<uint64_t> seen;
+
+            // NOTE: do NOT cast e->move; read its raw bytes instead.
+            auto km_hash = [](const ExpEntryEx* e) -> uint64_t {
+                uint64_t mv = 0;
+                const size_t n = (sizeof(mv) < sizeof(e->move)) ? sizeof(mv) : sizeof(e->move);
+                std::memcpy(&mv, &e->move, n);
+                return static_cast<uint64_t>(e->key) ^ (mv * 0x9E3779B185EBCA87ULL);
+            };
+
+            usize pvWritten = 0, mpvWritten = 0;
+
+            for (auto* const expList : {&_newPvExp, &_newMultiPvExp})
             {
-                for (const ExpEntryEx* exp : newExp)
+                for (const ExpEntryEx* exp : *expList)
                 {
                     if (exp->depth < MinDepth)
                         continue;
+
+                    const uint64_t sig = km_hash(exp);
+                    if (!seen.insert(sig).second)
+                        continue; // skip duplicate (same position key + move)
 
                     if (!write_entry(exp, false))
                     {
@@ -768,18 +788,20 @@ class ExperienceData {
                           << fn << "]" << sync_endl;
                         return false;
                     }
+
+                    if (expList == &_newPvExp) ++pvWritten; else ++mpvWritten;
                 }
             }
 
-            sync_cout << "info string Saved " << _newPvExp.size() << " PV and "
-                      << _newMultiPvExp.size() << " MultiPV entries to experience file: " << fn
+            sync_cout << "info string Saved " << pvWritten << " PV and "
+                      << mpvWritten << " MultiPV entries to experience file: " << fn
                       << sync_endl;
         }
 
-        //Flush buffer
+        // Flush buffer
         write_entry(nullptr, true);
 
-        //Clear new moves
+        // Clear new moves
         clear_new_exp();
 
         return true;
