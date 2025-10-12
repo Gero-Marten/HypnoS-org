@@ -420,25 +420,42 @@ void Search::Worker::start_searching() {
     threads.wait_for_search_finished();
 
 #if defined(HYP_FIXED_ZOBRIST)
-    // Always write the PV in the Experience even for single runs
+    // Always write the PV to the Experience file even for single-run searches.
+    // If the GUI requested 'go depth N' but issued 'stop' before the engine
+    // actually reached N (so completedDepth < N), use N as a fallback for the
+    // MinDepth gate. This mirrors the old engine behavior and prevents losing
+    // partially-completed per-move analyses triggered by the viewer.
     if (!Experience::is_learning_paused()
         && !rootPos.is_chess960()
         && !(bool) options["Experience Readonly"]
         && !(bool) options["UCI_LimitStrength"]
-        && completedDepth >= Experience::MinDepth
         && !rootMoves.empty()
         && !rootMoves[0].pv.empty()
         && rootMoves[0].pv[0] != Move::none())
     {
-        Experience::add_pv_experience(rootPos.key(),
-                                      rootMoves[0].pv[0],
-                                      rootMoves[0].score,
-                                      completedDepth);
+        Depth effDepth = completedDepth;      // effective depth to store
+        if (limits.depth > 0)                 // if GUI asked for a fixed depth
+            effDepth = std::max(effDepth, Depth(limits.depth));  // fallback to requested depth
 
-        sync_cout << "info string [EXP] add_pv_experience depth="
-                  << completedDepth << sync_endl;
+        if (effDepth >= Experience::MinDepth)
+        {
+            Experience::add_pv_experience(rootPos.key(),
+                                          rootMoves[0].pv[0],
+                                          rootMoves[0].score,
+                                          effDepth);
+
+            // Debug line to confirm EXP write per search
+            sync_cout << "info string [EXP] add_pv_experience depth="
+                      << effDepth << sync_endl;
+        }
     }
 #endif
+
+    // When playing in 'nodes as time' mode, subtract the searched nodes from
+    // the available ones before exiting.
+    if (limits.npmsec)
+        main_manager()->tm.advance_nodes_time(threads.nodes_searched()
+                                              - limits.inc[rootPos.side_to_move()]);
 
     // When playing in 'nodes as time' mode, subtract the searched nodes from
     // the available ones before exiting.
