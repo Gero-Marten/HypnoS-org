@@ -47,6 +47,7 @@ endif
 ### Installation dir definitions
 PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
+PROFILE_DIR ?= profdir
 
 ### Built-in benchmark for pgo-builds
 PGOBENCH = $(WINE_PATH) ./$(EXE) bench
@@ -988,7 +989,7 @@ objclean:
 
 # clean auxiliary profiling files
 profileclean:
-	@rm -rf profdir
+	@rm -rf $(PROFILE_DIR)
 	@rm -f bench.txt *.gcda *.gcno ./syzygy/*.gcda ./nnue/*.gcda ./nnue/features/*.gcda *.s PGOBENCH.out
 	@rm -f hypnos.profdata *.profraw
 	@rm -f hypnos.*args*
@@ -1078,7 +1079,7 @@ config-sanity: net
 	 test "$(comp)" = "aarch64-linux-android21-clang")
 
 $(EXE): $(OBJS)
-	+$(CXX) -o $@ $(OBJS) $(LDFLAGS)
+	$(CXX) -o $(EXE) $(OBJS) $(LDFLAGS) $(EXTRALDFLAGS)
 
 # Force recompilation to ensure version info is up-to-date
 misc.o: FORCE
@@ -1094,22 +1095,22 @@ clang-profile-use:
 	$(XCRUN) $(LLVM_PROFDATA) merge -output=stockfish.profdata *.profraw
 	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
 	EXTRACXXFLAGS='-fprofile-use=stockfish.profdata' \
-	EXTRALDFLAGS='-fprofile-use ' \
+	EXTRALDFLAGS='' \
 	all
 
 gcc-profile-make:
-	@mkdir -p profdir
+	@mkdir -p $(PROFILE_DIR)
 	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-generate=profdir' \
+	EXTRACXXFLAGS='-fprofile-generate=$(PROFILE_DIR)' \
 	EXTRACXXFLAGS+=$(EXTRAPROFILEFLAGS) \
 	EXTRALDFLAGS='-lgcov' \
 	all
 
 gcc-profile-use:
 	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-use=profdir -fno-peel-loops -fno-tracer' \
+	EXTRACXXFLAGS='-fprofile-use=$(PROFILE_DIR) -fprofile-correction -fno-peel-loops -fno-tracer' \
 	EXTRACXXFLAGS+=$(EXTRAPROFILEFLAGS) \
-	EXTRALDFLAGS='-lgcov' \
+	EXTRALDFLAGS='' \
 	all
 
 icx-profile-make:

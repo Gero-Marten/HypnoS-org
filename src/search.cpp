@@ -419,11 +419,33 @@ void Search::Worker::start_searching() {
     // Wait until all threads have finished
     threads.wait_for_search_finished();
 
+#if defined(HYP_FIXED_ZOBRIST)
+    // Always write the PV in the Experience even for single runs
+    if (!Experience::is_learning_paused()
+        && !rootPos.is_chess960()
+        && !(bool) options["Experience Readonly"]
+        && !(bool) options["UCI_LimitStrength"]
+        && completedDepth >= Experience::MinDepth
+        && !rootMoves.empty()
+        && !rootMoves[0].pv.empty()
+        && rootMoves[0].pv[0] != Move::none())
+    {
+        Experience::add_pv_experience(rootPos.key(),
+                                      rootMoves[0].pv[0],
+                                      rootMoves[0].score,
+                                      completedDepth);
+
+        sync_cout << "info string [EXP] add_pv_experience depth="
+                  << completedDepth << sync_endl;
+    }
+#endif
+
     // When playing in 'nodes as time' mode, subtract the searched nodes from
     // the available ones before exiting.
     if (limits.npmsec)
         main_manager()->tm.advance_nodes_time(threads.nodes_searched()
                                               - limits.inc[rootPos.side_to_move()]);
+
 
     Worker* bestThread = this;
     Skill   skill =

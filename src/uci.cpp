@@ -51,7 +51,11 @@
 
 namespace Hypnos {
 
+// forward: definita in misc.cpp
+void start_logger(const std::string& fname);
+
 #if defined(HYP_FIXED_ZOBRIST)
+
 // Forward declaration: the definition is in position.cpp (where you include hypnos_zobrist.h)
 namespace HypnosZobrist { void SetHypnosZobrist(); }
 
@@ -180,6 +184,13 @@ void UCIEngine::loop() {
             engine.set_ponderhit(false);
         }
         else if (token == "uci") {
+            // Avvia il log UCI automaticamente alla prima chiamata
+            static bool log_started = false;
+            if (!log_started) {
+                start_logger("hypnos_uci.log");
+                log_started = true;
+            }
+
             sync_cout << "id name " << engine_info(true) << "\n"
                       << engine.get_options() << sync_endl;
             sync_cout << "uciok" << sync_endl;
@@ -896,6 +907,11 @@ void UCIEngine::on_bestmove(std::string_view bestmove, std::string_view ponder) 
     if (!ponder.empty())
         std::cout << " ponder " << ponder;
     std::cout << sync_endl;
+
+#if defined(HYP_FIXED_ZOBRIST)
+    // Persisti l'Experience dopo ogni ricerca (compat con Viewer a ondate)
+    Experience::save();
+#endif
 }
 
 }  // namespace Hypnos
