@@ -419,6 +419,125 @@ void Search::Worker::start_searching() {
     // Wait until all threads have finished
     threads.wait_for_search_finished();
 
+#if defined(HYP_FIXED_ZOBRIST)
+    // Always write the PV to the Experience file even for single-run searches.
+    // If the GUI requested 'go depth N' but issued 'stop' before the engine
+    // actually reached N (so completedDepth < N), use N as a fallback for the
+    // MinDepth gate. This mirrors the old engine behavior and prevents losing
+    // partially-completed per-move analyses triggered by the viewer.
+    if (!Experience::is_learning_paused()
+        && !rootPos.is_chess960()
+        && !(bool) options["Experience Readonly"]
+        && !(bool) options["UCI_LimitStrength"]
+        && !rootMoves.empty()
+        && !rootMoves[0].pv.empty()
+        && rootMoves[0].pv[0] != Move::none())
+    {
+        Depth effDepth = completedDepth;      // effective depth to store
+        if (limits.depth > 0)                 // if GUI asked for a fixed depth
+            effDepth = std::max(effDepth, Depth(limits.depth));  // fallback to requested depth
+
+        if (effDepth >= Experience::MinDepth)
+        {
+            Experience::add_pv_experience(rootPos.key(),
+                                          rootMoves[0].pv[0],
+                                          rootMoves[0].score,
+                                          effDepth);
+
+            // Debug line to confirm EXP write per search
+            sync_cout << "info string [EXP] add_pv_experience depth="
+                      << effDepth << sync_endl;
+
+            // If this run was invoked with 'searchmoves' (typical of the viewer),
+            // flush immediately so the external tool sees the entry right away.
+            if (!limits.searchmoves.empty())
+                Experience::save();
+        }
+    }
+
+    // --- HypnoS Experience: MultiPV (legacy-style aggregation) -----------------
+    // Collect the first PV of each thread (skipping the overall best move),
+    // merge duplicates by move, keep the highest depth for that move, and
+    // average the scores when depth is equal. Then store as MultiPV experience.
+    {
+        struct UniqueMoveInfo {
+            Move  move;     // root move
+            Depth depth;    // best depth observed for this move
+            Value scoreSum; // sum of scores at the same depth (for averaging)
+            int   count;    // number of scores added to scoreSum
+        };
+
+        std::vector<UniqueMoveInfo> uniqueMoves;
+
+        // Determine the best move to skip (already written above as PV)
+        Move bestMv = Move::none();
+        if (!rootMoves.empty() && !rootMoves[0].pv.empty())
+            bestMv = rootMoves[0].pv[0];
+        else {
+            // Fallback: ask best thread if available
+            auto* bt = threads.get_best_thread()->worker.get();
+            if (bt && !bt->rootMoves.empty() && !bt->rootMoves[0].pv.empty())
+                bestMv = bt->rootMoves[0].pv[0];
+        }
+
+        // Collect alternatives from all threads
+        for (auto&& th : threads)
+        {
+            auto* w = th->worker.get();
+            if (!w || w->rootMoves.empty() || w->rootMoves[0].pv.empty())
+                continue;
+
+            const Move m0 = w->rootMoves[0].pv[0];
+            if (m0 == Move::none() || m0 == bestMv)
+                continue; // skip the best PV move
+
+            UniqueMoveInfo thisMove{ m0, w->completedDepth,
+                                     w->rootMoves[0].score, 1 };
+
+            bool merged = false;
+            for (auto& um : uniqueMoves)
+            {
+                if (um.move == thisMove.move)
+                {
+                    // Keep the entry with greater depth; if equal, accumulate score
+                    if (thisMove.depth > um.depth)
+                        um = thisMove;
+                    else if (thisMove.depth == um.depth) {
+                        um.scoreSum += thisMove.scoreSum;
+                        um.count++;
+                    }
+                    merged = true;
+                    break;
+                }
+            }
+            if (!merged)
+                uniqueMoves.push_back(thisMove);
+        }
+
+        // Commit MultiPV entries (average score at best depth). Respect MinDepth.
+        bool wrote_mpv = false;
+        for (const auto& info : uniqueMoves)
+        {
+            if (info.depth < Experience::MinDepth)
+                continue;
+
+            Experience::add_multipv_experience(rootPos.key(),
+                                               info.move,
+                                               info.scoreSum / info.count,
+                                               info.depth);
+            wrote_mpv = true;
+
+            // Debug log: confirm MultiPV insertion
+            sync_cout << "info string [EXP] add_multipv_experience depth="
+                      << info.depth << sync_endl;
+        }
+
+        // Flush immediately if we wrote MultiPV entries (and not readonly)
+        if (wrote_mpv && !(bool)options["Experience Readonly"])
+            Experience::save();
+    }
+#endif
+
     // When playing in 'nodes as time' mode, subtract the searched nodes from
     // the available ones before exiting.
     if (limits.npmsec)
@@ -433,88 +552,6 @@ void Search::Worker::start_searching() {
         && rootMoves[0].pv[0] != Move::none())
         bestThread = threads.get_best_thread()->worker.get();
 
-#if defined(HYP_FIXED_ZOBRIST)
-    // --- HypnoS Experience: writing learning outcomes at the end of research-----------------
-    if (bestThread->rootMoves[0].pv[0] != Move::none()
-        && !Experience::is_learning_paused()
-        && !bestThread->rootPos.is_chess960()
-        && !(bool) options["Experience Readonly"]
-        && !(bool) options["UCI_LimitStrength"]
-        && bestThread->completedDepth >= Experience::MinDepth)
-    {
-        // 1) Add the best PV
-        Experience::add_pv_experience(bestThread->rootPos.key(),
-                                      bestThread->rootMoves[0].pv[0],
-                                      bestThread->rootMoves[0].score,
-                                      bestThread->completedDepth);
-
-        // Debug log: conferma inserimento PV
-        sync_cout << "info string [EXP] add_pv_experience depth="
-                  << bestThread->completedDepth << sync_endl;
-
-        // 2) Collect "alternative" moves from threads (MultiPV experience)
-        struct UniqueMoveInfo {
-            Move  move;
-            Depth depth;
-            Value scoreSum;
-            int   count;
-        };
-
-        std::vector<UniqueMoveInfo> uniqueMoves;
-
-        for (auto&& th : threads)
-        {
-            auto* w = th->worker.get();
-            if (!w || w->rootMoves.empty() || w->rootMoves[0].pv.empty())
-                continue;
-
-            // Skip the best move already added
-            if (w->rootMoves[0].pv[0] == bestThread->rootMoves[0].pv[0])
-                continue;
-
-            UniqueMoveInfo thisMove{w->rootMoves[0].pv[0], w->completedDepth,
-                                    w->rootMoves[0].score, 1};
-
-            bool merged = false;
-            for (auto& um : uniqueMoves)
-            {
-                if (um.move == thisMove.move)
-                {
-                    // Keep the version with greater depth; if equal, accumulate score
-                    if (thisMove.depth > um.depth)
-                        um = thisMove;
-                    else if (thisMove.depth == um.depth)
-                    {
-                        um.scoreSum += thisMove.scoreSum;
-                        um.count++;
-                    }
-                    merged = true;
-                    break;
-                }
-            }
-            if (!merged)
-                uniqueMoves.push_back(thisMove);
-        }
-
-        for (const auto& info : uniqueMoves) {
-            Experience::add_multipv_experience(rootPos.key(),
-                                               info.move,
-                                               info.scoreSum / info.count,
-                                               info.depth);
-
-            // Debug log: confirm MultiPV insertion
-            sync_cout << "info string [EXP] add_multipv_experience depth="
-                      << info.depth << sync_endl;
-        }
-
-        // 3) If the game is "decided", save and suspend learning
-        if (Utility::is_game_decided(rootPos, bestThread->rootMoves[0].score))
-        {
-            Experience::save();
-            Experience::pause_learning();
-        }
-    }
-#endif
 
     main_manager()->bestPreviousScore        = bestThread->rootMoves[0].score;
     main_manager()->bestPreviousAverageScore = bestThread->rootMoves[0].averageScore;
@@ -1450,13 +1487,6 @@ moves_loop:  // When in check, search starts here
     value = bestValue;
 
     int moveCount = 0;
-
-																			   
-																  
-																
-																		 
-								  
-																			   
 
     // Step 13. Loop through all pseudo-legal moves until no moves remain
     // or a beta cutoff occurs.
@@ -2684,6 +2714,5 @@ bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& po
     pos.undo_move(pv[0]);
     return pv.size() > 1;
 }
-
 
 }  // namespace Hypnos
