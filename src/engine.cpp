@@ -133,10 +133,7 @@ Engine::Engine(std::optional<std::string> path) :
 
     options.add("Skill Level", Option(20, 0, 20));
 
-    // Time manager knobs
-    options.add("Move Overhead",          Option(100, 0, 5000));   // ms
-    options.add("Minimum Thinking Time",  Option(100, 0, 2000));   // ms
-    options.add("Slow Mover",             Option(100, 10, 500));   // percent (100 = no change)
+    options.add("MoveOverhead", Option(10, 0, 5000));
     options.add("nodestime", Option(0, 0, 10000));
 
     options.add("UCI_Chess960", Option(false));
@@ -148,12 +145,6 @@ Engine::Engine(std::optional<std::string> path) :
                        Hypnos::Search::Skill::HighestElo));
 
     options.add("UCI_ShowWDL", Option(false));
-
-    // Fail-high/low info throttling (UCI-tunable)
-    options.add("FailInfo Enabled",   Option(true));
-    options.add("FailInfo First ms",  Option(4000, 0, 60000));
-    options.add("FailInfo Min Nodes", Option(10000000, 0, 1000000000));
-    options.add("FailInfo Rate ms",   Option(400, 0, 10000));
 
     // Debug: print NNUE weights once per search at root (main thread)
     options.add("NNUE Log Weights", Option(false));

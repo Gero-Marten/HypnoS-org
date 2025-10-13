@@ -630,15 +630,6 @@ void Search::Worker::iterative_deepening() {
 
     lowPlyHistory.fill(97);
 
-    // Snapshot UCI options for fail-high/low info cadence (once per root search)
-    // Read once to avoid map lookups in the hot path and to keep values consistent
-    // for the whole root search (GUI changes take effect on the next search).
-    const bool     fi_enabled   = bool(options["FailInfo Enabled"]);
-    const int      fi_first_ms  = int(options["FailInfo First ms"]);
-    const uint64_t fi_min_nodes = uint64_t(int(options["FailInfo Min Nodes"]));
-    const int      fi_rate_ms   = int(options["FailInfo Rate ms"]);
-    int64_t        fi_last_info_ms = -100000;   // rate limiter anchor (ms), reset at rootDepth == 1
-
     // Iterative deepening loop until requested to stop or the target depth is reached
     while (++rootDepth < MAX_PLY && !threads.stop
            && !(limits.depth && mainThread && rootDepth > limits.depth))
@@ -720,28 +711,13 @@ void Search::Worker::iterative_deepening() {
                 if (threads.stop)
                     break;
 
-                // On fail-high/low, emit an update before the re-search.
-                // Use UCI-snapshotted gates: first update after (First ms OR Min Nodes),
-                // then throttle by Rate ms to avoid GUI flooding (e.g., Fritz 19).
-                {
-                    const int64_t now = elapsed_time();  // ms since search start
 
-                    // Reset rate limiter at the first root depth of each new iteration
-                    if (rootDepth == 1)
-                        fi_last_info_ms = -100000;
-
-                    const bool rate_ok    = now - fi_last_info_ms >= fi_rate_ms;              // ≤ ~1000/Rate per sec
-                    const bool first_gate = (now >= fi_first_ms) || (nodes >= fi_min_nodes);  // time or nodes gate
-
-                    if (fi_enabled
-                        && mainThread && multiPV == 1
-                        && (bestValue <= alpha || bestValue >= beta)
-                        && rate_ok && first_gate)
-                    {
-                        main_manager()->pv(*this, threads, tt, rootDepth);
-                        fi_last_info_ms = now;
-                    }
-                }
+                // When failing high/low give some update before a re-search. To avoid
+                // excessive output that could hang GUIs like Fritz 19, only start
+                // at nodes > 10M (rather than depth N, which can be reached quickly)
+                if (mainThread && multiPV == 1 && (bestValue <= alpha || bestValue >= beta)
+                    && nodes > 10000000)
+                    main_manager()->pv(*this, threads, tt, rootDepth);
 
                 // In case of failing low/high increase aspiration window and re-search,
                 // otherwise exit the loop.
