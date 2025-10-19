@@ -501,7 +501,6 @@ void UCIEngine::bench(std::istream& args) {
         on_update_full(i, options["UCI_ShowWDL"]);
     });
 
-
     std::vector<std::string> list = Benchmark::setup_bench(engine.fen(), args);
 
     num = count_if(list.begin(), list.end(),
