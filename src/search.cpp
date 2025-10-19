@@ -449,10 +449,6 @@ void Search::Worker::start_searching() {
                                           rootMoves[0].score,
                                           effDepth);
 
-            // Debug line to confirm EXP write per search
-            sync_cout << "info string [EXP] add_pv_experience depth="
-                      << effDepth << sync_endl;
-
             // If this run was invoked with 'searchmoves' (typical of the viewer),
             // flush immediately so the external tool sees the entry right away.
             if (!limits.searchmoves.empty())
@@ -531,10 +527,6 @@ void Search::Worker::start_searching() {
                                                info.scoreSum / info.count,
                                                info.depth);
             wrote_mpv = true;
-
-            // Debug log: confirm MultiPV insertion
-            sync_cout << "info string [EXP] add_multipv_experience depth="
-                      << info.depth << sync_endl;
         }
 
         // Flush immediately if we wrote MultiPV entries (and not readonly)

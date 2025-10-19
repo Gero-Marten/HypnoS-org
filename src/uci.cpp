@@ -486,6 +486,11 @@ void UCIEngine::go(std::istringstream& is) {
 }
 
 void UCIEngine::bench(std::istream& args) {
+#if defined(HYP_FIXED_ZOBRIST)
+    // Bench mode ON: create .exp header only, suppress entry writes
+    Experience::g_benchMode.store(true, std::memory_order_relaxed);
+    Experience::touch();
+#endif
     std::string token;
     uint64_t    num, nodes = 0, cnt = 1;
     uint64_t    nodesSearched = 0;
@@ -495,6 +500,7 @@ void UCIEngine::bench(std::istream& args) {
         nodesSearched = i.nodes;
         on_update_full(i, options["UCI_ShowWDL"]);
     });
+
 
     std::vector<std::string> list = Benchmark::setup_bench(engine.fen(), args);
 
@@ -550,11 +556,21 @@ void UCIEngine::bench(std::istream& args) {
               << "\nNodes searched  : " << nodes    //
               << "\nNodes/second    : " << 1000 * nodes / elapsed << std::endl;
 
+#if defined(HYP_FIXED_ZOBRIST)
+    // Bench mode OFF
+    Experience::g_benchMode.store(false, std::memory_order_relaxed);
+#endif
+
     // reset callback, to not capture a dangling reference to nodesSearched
     engine.set_on_update_full([&](const auto& i) { on_update_full(i, options["UCI_ShowWDL"]); });
 }
 
 void UCIEngine::benchmark(std::istream& args) {
+#if defined(HYP_FIXED_ZOBRIST)
+    // Bench mode ON: create .exp header only, suppress entry writes
+    Experience::g_benchMode.store(true, std::memory_order_relaxed);
+    Experience::touch();
+#endif
     // Probably not very important for a test this long, but include for completeness and sanity.
     static constexpr int NUM_WARMUP_POSITIONS = 3;
 
@@ -714,6 +730,11 @@ void UCIEngine::benchmark(std::istream& args) {
               << "\nNodes/second               : " << 1000 * nodes / totalTime << std::endl;
 
     // clang-format on
+
+#if defined(HYP_FIXED_ZOBRIST)
+    // Bench mode OFF
+    Experience::g_benchMode.store(false, std::memory_order_relaxed);
+#endif
 
     init_search_update_listeners();
 

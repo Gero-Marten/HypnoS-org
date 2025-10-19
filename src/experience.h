@@ -20,6 +20,7 @@
 #define EXPERIENCE_H_INCLUDED
 
 #include "types.h"
+#include <atomic>
 
 //using namespace std;
 using u8    = std::uint8_t;
@@ -236,6 +237,10 @@ bool is_learning_paused();
 
 void add_pv_experience(ExpKey k, ExpMove m, ExpValue v, ExpDepth d);
 void add_multipv_experience(ExpKey k, ExpMove m, ExpValue v, ExpDepth d);
+
+// bench mode: crea file ma non scrive entry durante il bench
+extern std::atomic<bool> g_benchMode;
+void touch();
 
 }
 
