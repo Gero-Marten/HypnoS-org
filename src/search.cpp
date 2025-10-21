@@ -549,7 +549,6 @@ void Search::Worker::start_searching() {
         && rootMoves[0].pv[0] != Move::none())
         bestThread = threads.get_best_thread()->worker.get();
 
-
     main_manager()->bestPreviousScore        = bestThread->rootMoves[0].score;
     main_manager()->bestPreviousAverageScore = bestThread->rootMoves[0].averageScore;
 
