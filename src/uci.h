@@ -68,7 +68,7 @@ class UCIEngine {
     std::uint64_t perft(const Search::LimitsType&);
 
     static void on_update_no_moves(const Engine::InfoShort& info);
-    static void on_update_full(const Engine::InfoFull& info, bool showWDL);
+    static void on_update_full(const Engine::InfoFull& info);
     static void on_iter(const Engine::InfoIter& info);
     static void on_bestmove(std::string_view bestmove, std::string_view ponder);
 
