@@ -2657,7 +2657,6 @@ void SearchManager::pv(Search::Worker&           worker,
         if (!pv.empty())
             pv.pop_back();
 
-        auto wdl   = worker.options["UCI_ShowWDL"] ? UCIEngine::wdl(v, pos) : "";
         auto bound = rootMoves[i].scoreLowerbound
                      ? "lowerbound"
                      : (rootMoves[i].scoreUpperbound ? "upperbound" : "");
@@ -2667,8 +2666,7 @@ void SearchManager::pv(Search::Worker&           worker,
         info.depth    = d;
         info.selDepth = rootMoves[i].selDepth;
         info.multiPV  = i + 1;
-        info.score    = {v, pos};
-        info.wdl      = wdl;
+        info.score    = Score{ v, pos };
 
         if (!isExact)
             info.bound = bound;

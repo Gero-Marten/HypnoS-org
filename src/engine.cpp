@@ -147,8 +147,6 @@ Engine::Engine(std::optional<std::string> path) :
                 Option(Hypnos::Search::Skill::LowestElo, Hypnos::Search::Skill::LowestElo,
                        Hypnos::Search::Skill::HighestElo));
 
-    options.add("UCI_ShowWDL", Option(false));
-
     // Fail-high/low info throttling (UCI-tunable)
     options.add("FailInfo Enabled",   Option(true));
     options.add("FailInfo First ms",  Option(4000, 0, 60000));

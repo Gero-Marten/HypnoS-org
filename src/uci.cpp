@@ -150,7 +150,7 @@ void UCIEngine::init_search_update_listeners() {
     engine.set_on_iter([](const auto& i) { on_iter(i); });
     engine.set_on_update_no_moves([](const auto& i) { on_update_no_moves(i); });
     engine.set_on_update_full(
-      [this](const auto& i) { on_update_full(i, engine.get_options()["UCI_ShowWDL"]); });
+      [this](const auto& i) { on_update_full(i); });
     engine.set_on_bestmove([](const auto& bm, const auto& p) { on_bestmove(bm, p); });
     engine.set_on_verify_networks([](const auto& s) { print_info_string(s); });
 }
@@ -494,11 +494,10 @@ void UCIEngine::bench(std::istream& args) {
     std::string token;
     uint64_t    num, nodes = 0, cnt = 1;
     uint64_t    nodesSearched = 0;
-    const auto& options       = engine.get_options();
 
     engine.set_on_update_full([&](const auto& i) {
         nodesSearched = i.nodes;
-        on_update_full(i, options["UCI_ShowWDL"]);
+        on_update_full(i);
     });
 
     std::vector<std::string> list = Benchmark::setup_bench(engine.fen(), args);
@@ -561,7 +560,7 @@ void UCIEngine::bench(std::istream& args) {
 #endif
 
     // reset callback, to not capture a dangling reference to nodesSearched
-    engine.set_on_update_full([&](const auto& i) { on_update_full(i, options["UCI_ShowWDL"]); });
+    engine.set_on_update_full([&](const auto& i) { on_update_full(i); });
 }
 
 void UCIEngine::benchmark(std::istream& args) {
@@ -781,41 +780,30 @@ void UCIEngine::position(std::istringstream& is) {
     engine.set_position(fen, moves);
 }
 
-namespace {
+namespace { // anonymous helpers only for win_rate_model
 
-struct WinRateParams {
-    double a;
-    double b;
-};
+// The win rate model returns the probability of winning (per mille) given an eval and game ply.
+// Polynomial fit over Fishtest LTC; logistic transform over eval in centipawns.
+int win_rate_model(Value v, const Position& pos) {
 
-WinRateParams win_rate_params(const Position& pos) {
+    // Limit model to 240 plies and rescale
+    int ply = std::min(240, pos.game_ply());
+    double m = ply / 64.0;
 
-    int material = pos.count<PAWN>() + 3 * pos.count<KNIGHT>() + 3 * pos.count<BISHOP>()
-                 + 5 * pos.count<ROOK>() + 9 * pos.count<QUEEN>();
-
-    // The fitted model only uses data for material counts in [17, 78], and is anchored at count 58.
-    double m = std::clamp(material, 17, 78) / 58.0;
-
-    // Return a = p_a(material) and b = p_b(material), see github.com/official-Hypnos/WDL_model
-    constexpr double as[] = {-13.50030198, 40.92780883, -36.82753545, 386.83004070};
-    constexpr double bs[] = {96.53354896, -165.79058388, 90.89679019, 49.29561889};
-
+    // Third-order polynomial coefficients (Fishtest-based fit)
+    const double as[] = { 0.50379905,  -4.12755858,  18.95487051, 152.00733652 };
+    const double bs[] = {-1.71790378,  10.71543602, -17.05515898,  41.15680404 };
     double a = (((as[0] * m + as[1]) * m + as[2]) * m) + as[3];
     double b = (((bs[0] * m + bs[1]) * m + bs[2]) * m) + bs[3];
 
-    return {a, b};
+    // Transform eval to centipawns with limited range
+    double x = std::clamp(double(v), -2000.0, 2000.0);
+
+    // Return win rate in per mille, rounded to nearest
+    return int(0.5 + 1000.0 / (1.0 + std::exp((a - x) / b)));
 }
 
-// The win rate model is 1 / (1 + exp((a - eval) / b)), where a = p_a(material) and b = p_b(material).
-// It fits the LTC fishtest statistics rather accurately.
-int win_rate_model(Value v, const Position& pos) {
-
-    auto [a, b] = win_rate_params(pos);
-
-    // Return the win rate in per mille units, rounded to the nearest integer.
-    return int(0.5 + 1000 / (1 + std::exp((a - double(v)) / b)));
-}
-}
+} // end anonymous namespace
 
 std::string UCIEngine::format_score(const Score& s) {
     constexpr int TB_CP = 20000;
@@ -835,17 +823,9 @@ std::string UCIEngine::format_score(const Score& s) {
     return s.visit(format);
 }
 
-// Turns a Value to an integer centipawn number,
-// without treatment of mate and similar special scores.
-int UCIEngine::to_cp(Value v, const Position& pos) {
-
-    // In general, the score can be defined via the WDL as
-    // (log(1/L - 1) - log(1/W - 1)) / (log(1/L - 1) + log(1/W - 1)).
-    // Based on our win_rate_model, this simply yields v / a.
-
-    auto [a, b] = win_rate_params(pos);
-
-    return std::round(100 * int(v) / a);
+int UCIEngine::to_cp(Value v, const Position& /*pos*/) {
+    // Usa il PawnValue globale (types.h: constexpr Value PawnValue = 208)
+    return int(std::lround(double(v) * 100.0 / double(PawnValue)));
 }
 
 std::string UCIEngine::wdl(Value v, const Position& pos) {
@@ -884,7 +864,6 @@ std::string UCIEngine::move(Move m, bool chess960) {
     return move;
 }
 
-
 std::string UCIEngine::to_lower(std::string str) {
     std::transform(str.begin(), str.end(), str.begin(), [](auto c) { return std::tolower(c); });
 
@@ -905,7 +884,7 @@ void UCIEngine::on_update_no_moves(const Engine::InfoShort& info) {
     sync_cout << "info depth " << info.depth << " score " << format_score(info.score) << sync_endl;
 }
 
-void UCIEngine::on_update_full(const Engine::InfoFull& info, bool showWDL) {
+void UCIEngine::on_update_full(const Engine::InfoFull& info) {
     std::stringstream ss;
 
     ss << "info";
@@ -916,9 +895,6 @@ void UCIEngine::on_update_full(const Engine::InfoFull& info, bool showWDL) {
 
     if (!info.bound.empty())
         ss << " " << info.bound;
-
-    if (showWDL)
-        ss << " wdl " << info.wdl;
 
     ss << " nodes " << info.nodes        //
        << " nps " << info.nps            //
